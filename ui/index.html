@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TimeLog</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="widget">
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+
+    <!-- ============ HEADER ============ -->
+    <header data-tauri-drag-region>
+      <div class="head-left" data-tauri-drag-region>
+        <span class="logo"><span class="logo-mark"></span></span>
+        <span class="title" data-tauri-drag-region>TimeLog</span>
+      </div>
+      <div class="head-right">
+        <button id="btn-open-auto" class="icon-btn" title="Auto — ลงเวลาอัตโนมัติ">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 4 14 12 14 11 22 20 10 12 10 13 2"></polyline></svg>
+        </button>
+        <button id="btn-open-settings" class="icon-btn" title="ตั้งค่า">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="17" x2="20" y2="17"></line><circle cx="9" cy="7" r="2.4" fill="var(--bg-solid)"></circle><circle cx="15" cy="17" r="2.4" fill="var(--bg-solid)"></circle></svg>
+        </button>
+        <button id="btn-pin" class="icon-btn" title="ปักหมุด — ค้างไว้บนจอ ไม่ซ่อนอัตโนมัติ">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3H7l3-3-1-6z"></path><path d="M12 13v7"></path></svg>
+        </button>
+        <button id="btn-refresh" class="icon-btn" title="รีเฟรชจาก Jira">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-.9 4.5"></path><path d="M20 4v5h-5"></path></svg>
+        </button>
+        <button id="btn-close" class="icon-btn danger" title="ซ่อน">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ============ TODAY SUMMARY ============ -->
+    <section class="summary" data-tauri-drag-region>
+      <div class="sum-left" data-tauri-drag-region>
+        <div class="sum-nums" data-tauri-drag-region>
+          <span id="today-done">–</span>
+          <span class="sum-sep">/ <span id="today-target">8</span></span>
+          <span class="sum-unit">ชม. วันนี้</span>
+        </div>
+        <div class="sum-note" data-tauri-drag-region>
+          <span id="today-note"></span>
+          <span class="sum-eod" id="sum-eod" hidden>· เลิกงาน <span id="today-eod"></span></span>
+        </div>
+      </div>
+      <div class="ring">
+        <svg width="60" height="60" viewBox="0 0 60 60">
+          <circle cx="30" cy="30" r="25" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="6"></circle>
+          <circle id="ring-fill" cx="30" cy="30" r="25" fill="none" stroke="var(--accent)" stroke-width="6"
+                  stroke-linecap="round" stroke-dasharray="0 157.08" transform="rotate(-90 30 30)"></circle>
+        </svg>
+        <div class="ring-pct" id="ring-pct">–</div>
+      </div>
+    </section>
+
+    <!-- ============ MAIN — LOG ============ -->
+    <main class="log">
+      <div class="combo">
+        <svg class="combo-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4-4"></path></svg>
+        <input id="issue-search" type="text" placeholder="ค้นหางาน — รหัสหรือชื่อ…"
+               autocomplete="off" spellcheck="false" />
+        <div id="issue-dropdown" class="combo-list" hidden></div>
+      </div>
+
+      <div id="branch-chips" class="chips"></div>
+      <div id="issue-status" class="issue-status"></div>
+
+      <div class="timer-row">
+        <button id="btn-timer" class="btn ghost">▶ เริ่มจับเวลา</button>
+        <span id="timer-display" class="timer-display idle"></span>
+      </div>
+
+      <div class="log-row">
+        <input id="time-input" type="text" class="mono" placeholder="1:30 · 1.5 · 45m" />
+        <button id="btn-log" class="btn primary">บันทึก</button>
+      </div>
+
+      <div class="details">
+        <button id="btn-details" class="details-toggle" type="button">
+          <span class="caret">▸</span><span>เพิ่มรายละเอียด</span>
+        </button>
+        <div id="comment-wrap" class="details-body">
+          <textarea id="comment-input" rows="2" placeholder="ทำอะไรไปบ้าง (ไม่บังคับ)"></textarea>
+        </div>
+      </div>
+
+      <div id="log-msg" class="msg"></div>
+    </main>
+
+    <!-- ============ AUTO OVERLAY ============ -->
+    <div id="overlay-auto" class="overlay" hidden>
+      <div class="overlay-head" data-tauri-drag-region>
+        <span class="overlay-title">Auto</span>
+        <button id="btn-auto-back" class="icon-btn" title="กลับ">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+        </button>
+      </div>
+      <div class="overlay-body">
+        <div class="auto-head">
+          <span class="hint">ดึงนัดจาก Google Calendar + PR ที่ review บน GitHub วันนี้ แล้ว map กับ task</span>
+          <button id="btn-auto-fetch" class="btn ghost small">⟳ ดึงข้อมูล</button>
+        </div>
+        <div id="auto-list" class="auto-list"></div>
+        <button id="btn-auto-confirm" class="btn primary" style="display:none">ยืนยันลงเวลาที่เลือก</button>
+        <div id="auto-msg" class="msg"></div>
+      </div>
+    </div>
+
+    <!-- ============ SETTINGS OVERLAY ============ -->
+    <div id="overlay-settings" class="overlay" hidden>
+      <div class="overlay-head" data-tauri-drag-region>
+        <span class="overlay-title">ตั้งค่า</span>
+        <button id="btn-settings-back" class="icon-btn" title="กลับ">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+        </button>
+      </div>
+      <div class="overlay-body">
+        <details open>
+          <summary>Jira</summary>
+          <div class="conn-row">
+            <span id="jira-status" class="hint">ยังไม่ได้เชื่อมต่อ</span>
+            <button id="btn-conn-jira" class="btn ghost small">Login ด้วย Atlassian</button>
+          </div>
+          <label class="field">
+            <span>Project</span>
+            <input id="s-jira-project" list="project-list" placeholder="MDT" />
+            <datalist id="project-list"></datalist>
+          </label>
+          <div class="conn-row">
+            <button id="btn-diagnose" class="btn ghost small">🩺 ทดสอบการเชื่อมต่อ Jira</button>
+          </div>
+          <pre id="diagnose-out" class="diagnose-out"></pre>
+          <details class="nested" id="jira-manual">
+            <summary>แบบ manual (API token) — ใช้เมื่อไม่ได้ login</summary>
+            <label class="field"><span>Base URL</span><input id="s-jira-url" placeholder="https://company.atlassian.net" /></label>
+            <label class="field"><span>Email</span><input id="s-jira-email" placeholder="you@company.com" /></label>
+            <label class="field"><span>API Token</span><input id="s-jira-token" type="password" placeholder="Jira API token" /></label>
+          </details>
+        </details>
+
+        <details>
+          <summary>เวลาทำงาน &amp; แจ้งเตือน</summary>
+          <label class="field"><span>ชั่วโมงทำงานต่อวัน</span><input id="s-hours" type="number" step="0.5" min="1" max="24" /></label>
+          <label class="field"><span>เตือนทุกๆ (นาที, 0 = ปิด)</span><input id="s-remind-every" type="number" min="0" /></label>
+          <label class="field"><span>เตือนก่อนหมดวัน (นาที, 0 = ปิด)</span><input id="s-remind-before" type="number" min="0" /></label>
+          <label class="field"><span>เวลาเลิกงาน (HH:MM)</span><input id="s-eod" placeholder="18:00" /></label>
+          <label class="field"><span>รีเฟรช tray ทุกๆ (นาที)</span><input id="s-refresh" type="number" min="1" /></label>
+        </details>
+
+        <details>
+          <summary>Hotkey &amp; Workspace</summary>
+          <label class="field"><span>Hotkey เปิดหน้าต่าง</span><input id="s-hotkey" placeholder="Ctrl+Alt+L" /></label>
+          <label class="field">
+            <span>โฟลเดอร์โปรเจกต์ (บรรทัดละ path — ใช้ดู branch ของ Cursor/VS Code)</span>
+            <textarea id="s-roots" rows="3" placeholder="D:\Work\Project"></textarea>
+          </label>
+        </details>
+
+        <details>
+          <summary>Auto (Google Calendar)</summary>
+          <div class="conn-row">
+            <span id="google-status" class="hint">ยังไม่ได้เชื่อมต่อ</span>
+            <button id="btn-conn-google" class="btn ghost small">Login ด้วย Google</button>
+          </div>
+          <details class="nested" id="google-manual">
+            <summary>แบบ manual (ICS URL) — ใช้เมื่อไม่ได้ login</summary>
+            <label class="field">
+              <span>Secret ICS URL (Google Calendar → Settings → Secret address in iCal format)</span>
+              <input id="s-ics" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" />
+            </label>
+          </details>
+          <div class="field"><span>กติกา map: คำใน calendar → prefix ชื่อ task ใน Jira</span></div>
+          <div id="rules-list"></div>
+          <button id="btn-add-rule" class="btn ghost small">+ เพิ่มกติกา</button>
+        </details>
+
+        <details>
+          <summary>GitHub (PR ที่ review)</summary>
+          <div class="conn-row">
+            <span id="github-status" class="hint">ยังไม่ได้เชื่อมต่อ</span>
+            <button id="btn-conn-github" class="btn ghost small">Login ด้วย GitHub</button>
+          </div>
+          <label class="field">
+            <span>Org (ค้น PR เฉพาะใน org นี้ เช่น wisesight)</span>
+            <input id="s-github-org" placeholder="wisesight" />
+          </label>
+          <div class="field"><span class="hint">แท็บ Auto จะดึง PR ที่คุณ Comment / Approve / Request changes วันนี้ มา map กับ task ให้ลงเวลา</span></div>
+        </details>
+
+        <details id="oauth-app-section">
+          <summary>OAuth App (ตั้งครั้งเดียว)</summary>
+          <div class="field"><span>
+            สร้าง app ครั้งเดียวเพื่อให้ปุ่ม Login ใช้งานได้ — callback URL ของทั้งคู่ใช้
+            <code>http://127.0.0.1:53817/callback</code><br/>
+            • Atlassian: developer.atlassian.com → Create app (OAuth 2.0) → เปิด scope Jira <b>read/write:jira-work, offline_access</b><br/>
+            • Google: console.cloud.google.com → OAuth client (Desktop) + เปิด Calendar API (เลือก Internal ถ้าเป็น Workspace)<br/>
+            • GitHub: github.com/settings/developers → New OAuth App → scope <b>repo, read:org, read:user</b>
+          </span></div>
+          <label class="field"><span>Atlassian Client ID</span><input id="s-atl-id" /></label>
+          <label class="field"><span>Atlassian Client Secret</span><input id="s-atl-secret" type="password" /></label>
+          <label class="field"><span>Google Client ID</span><input id="s-goog-id" /></label>
+          <label class="field"><span>Google Client Secret</span><input id="s-goog-secret" type="password" /></label>
+          <label class="field"><span>GitHub Client ID</span><input id="s-gh-id" /></label>
+          <label class="field"><span>GitHub Client Secret</span><input id="s-gh-secret" type="password" /></label>
+        </details>
+
+        <details>
+          <summary>ทั่วไป &amp; อัปเดต</summary>
+          <label class="field check-field">
+            <input type="checkbox" id="s-autostart" />
+            <span>เปิด TimeLog อัตโนมัติตอน login เข้าเครื่อง</span>
+          </label>
+          <div class="conn-row">
+            <span class="hint">เวอร์ชัน <span id="app-version">–</span> <span id="update-status"></span></span>
+            <button id="btn-check-update" class="btn ghost small">ตรวจอัปเดต</button>
+          </div>
+        </details>
+
+        <button id="btn-save-settings" class="btn primary">บันทึกการตั้งค่า</button>
+        <div id="settings-msg" class="msg"></div>
+      </div>
+    </div>
+  </div>
+  <script src="main.js"></script>
+</body>
+</html>
