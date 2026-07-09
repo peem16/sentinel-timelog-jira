@@ -28,12 +28,6 @@
       "csp": null
     }
   },
-  "plugins": {
-    "updater": {
-      "endpoints": ["https://github.com/peem16/sentinel-timelog-jira/releases/latest/download/latest.json"],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzNzNBQTRCOTA3NUEyMQpSV1FoV2dlNXBEbzNBYUkyU1ZKc1NkdzBzbGJyR0ZncHRKNk11T1BiYTg4dHhmeXBGclF4V211ago="
-    }
-  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -43,7 +37,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "createUpdaterArtifacts": true
+    ]
   }
 }

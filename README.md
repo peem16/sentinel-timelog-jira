@@ -20,8 +20,7 @@
 - **ปักหมุด 📌** — กดปุ่มหมุดที่มุมขวาบนเพื่อให้ widget ค้างอยู่บนจอ ไม่ซ่อนอัตโนมัติเมื่อคลิกที่อื่น (กดซ้ำเพื่อกลับเป็นโหมด popup ปกติ)
 - **UI โปร่งใส** — acrylic (Windows) / vibrancy (macOS) + backdrop blur
 - **Token ปลอดภัย** — OAuth tokens เก็บใน OS keychain (Windows Credential Manager / macOS Keychain) ไม่ใช่ไฟล์ plaintext
-- **Autostart** — ติ๊ก "เปิดอัตโนมัติตอน login" ได้ในแท็บตั้งค่า (หัวข้อ ทั่วไป & อัปเดต)
-- **ตรวจอัปเดต** — ปุ่มตรวจ+ติดตั้งเวอร์ชันใหม่ในแท็บตั้งค่า (คน build ต้องตั้งค่า endpoint ก่อน — ดูหัวข้อ Auto-update)
+- **Autostart** — ติ๊ก "เปิดอัตโนมัติตอน login" ได้ในแท็บตั้งค่า (หัวข้อ ทั่วไป)
 
 ## ติดตั้ง / รัน
 
@@ -80,7 +79,7 @@ npm run build
 
 - กด **Login ด้วย Atlassian** → เบราว์เซอร์เปิด → Allow → แอปจะรู้ site + ตัวตนเอง แล้วโหลดรายชื่อ project ให้เลือกในช่อง Project
 - กด **Login ด้วย Google** → Allow → auto mode จะดึงนัดจาก Calendar API โดยตรง (แม่นกว่า ICS เพราะ Google expand นัดประจำให้เอง)
-- กด **Login ด้วย GitHub** + ใส่ **Org** (เช่น `wisesight`) → แท็บ Auto จะดึง PR ที่คุณ Comment / Approve / Request changes วันนี้ มา map เป็น task Jira จากชื่อ PR (เช่น `[MDT-1728] …` → `MDT-1728`) ให้ใส่เวลาแล้วกดยืนยันลงเวลา
+- กด **Login ด้วย GitHub** + ใส่ **Org** (เช่น `company`) → แท็บ Auto จะดึง PR ที่คุณ Comment / Approve / Request changes วันนี้ มา map เป็น task Jira จากชื่อ PR (เช่น `[MDT-1728] …` → `MDT-1728`) ให้ใส่เวลาแล้วกดยืนยันลงเวลา
 
 > ไม่อยากทำ OAuth? ยังใช้แบบ manual ได้: Jira API token + secret ICS URL อยู่ในหัวข้อย่อย "แบบ manual" ของแต่ละส่วน
 
@@ -89,33 +88,6 @@ npm run build
 - **Workspace** — ใส่ path โฟลเดอร์ที่มี git repos (สแกนลึก 1 ชั้น) เพื่อให้ suggest task จากชื่อ branch
 - **กติกา auto map** เช่น คำใน calendar: `Mandrake Grooming` → prefix task: `Grooming`
 - **Hotkey** — default `Ctrl+Alt+L` (ปุ่ม `fn` จับไม่ได้ในระดับ OS จึงใช้ combination ปกติแทน)
-
-การตั้งค่าเก็บที่ `%APPDATA%\com.wisesight.timelog\` (Windows) / `~/Library/Application Support/com.wisesight.timelog/` (macOS)
-— `settings.json` (การตั้งค่า) ส่วน **OAuth tokens เก็บใน OS keychain** (Windows Credential Manager /
-macOS Keychain, service `com.wisesight.timelog`) — ไฟล์ `connections.json` จากเวอร์ชันเก่าจะถูก
-migrate เข้า keychain แล้วลบทิ้งอัตโนมัติตอนเปิดแอปครั้งแรก
-
-## Auto-update (สำหรับคนที่ build แจกทีม)
-
-ปุ่ม "ตรวจอัปเดต" ในแท็บตั้งค่าจะทำงานได้ต้องตั้งค่า endpoint + ลายเซ็นก่อน (ทำครั้งเดียว):
-
-1. สร้างคู่กุญแจ: `npx tauri signer generate -w %USERPROFILE%\.tauri\timelog.key`
-   (เก็บ private key ให้ดี — ทำหายแล้วผู้ใช้เดิมจะอัปเดตต่อไม่ได้)
-2. เติมค่าใน section `plugins.updater` ของ `src-tauri/tauri.conf.json` (ตอนนี้เป็นค่าว่างอยู่ — ห้ามลบ section ทิ้ง ไม่งั้นแอป panic ตอนบูต):
-   ```json
-   "plugins": {
-     "updater": {
-       "endpoints": ["https://<host>/latest.json"],
-       "pubkey": "<public key จากข้อ 1>"
-     }
-   }
-   ```
-   และในหัวข้อ `bundle` เพิ่ม `"createUpdaterArtifacts": true`
-3. ตอน build ตั้ง env `TAURI_SIGNING_PRIVATE_KEY` (และ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` ถ้าตั้งรหัสไว้)
-4. อัปโหลด installer + ไฟล์ `.sig` + `latest.json` ขึ้น host — ใช้ GitHub Releases ได้เลย
-   (endpoint = `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`)
-
-ยังไม่ตั้งค่า → กดตรวจอัปเดตจะขึ้นว่า updater ยังไม่ได้ตั้งค่า (ส่วนอื่นของแอปทำงานปกติ)
 
 ## โครงสร้าง
 

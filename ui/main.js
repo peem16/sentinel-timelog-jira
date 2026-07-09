@@ -1093,7 +1093,7 @@ $("btn-add-rule").onclick = () => {
   renderRules(rules);
 };
 
-/* ---- autostart + updates (apply immediately, not tied to the save button) ---- */
+/* ---- autostart (applies immediately, not tied to the save button) ---- */
 
 async function loadGeneralInfo() {
   try { $("app-version").textContent = "v" + (await invoke("app_version")); } catch {}
@@ -1108,27 +1108,6 @@ $("s-autostart").onchange = async (e) => {
   } catch (err) {
     e.target.checked = !want; // revert the toggle — the OS call failed
     setMsg("settings-msg", String(err), false);
-  }
-};
-
-$("btn-check-update").onclick = async () => {
-  const st = $("update-status");
-  const btn = $("btn-check-update");
-  btn.disabled = true;
-  st.textContent = "· กำลังตรวจ…";
-  try {
-    const info = await invoke("check_update");
-    if (!info) {
-      st.textContent = "· เป็นเวอร์ชันล่าสุดแล้ว ✓";
-      return;
-    }
-    st.textContent = `· พบ v${info.version} — กำลังดาวน์โหลด+ติดตั้ง…`;
-    await invoke("install_update"); // แอปจะปิดตัว/รีสตาร์ตเองเมื่อเสร็จ
-  } catch (e) {
-    st.textContent = "";
-    setMsg("settings-msg", String(e), false);
-  } finally {
-    btn.disabled = false;
   }
 };
 

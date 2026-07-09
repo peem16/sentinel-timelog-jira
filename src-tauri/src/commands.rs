@@ -662,7 +662,7 @@ pub async fn list_projects(app: AppHandle) -> Result<Vec<ProjectLite>, String> {
     client.list_projects().await
 }
 
-/* ================= autostart / updater ================= */
+/* ================= autostart ================= */
 
 #[tauri::command]
 pub fn app_version(app: AppHandle) -> String {
@@ -684,48 +684,6 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
     } else {
         autolaunch.disable().map_err(|e| format!("ปิด autostart ไม่ได้: {e}"))
     }
-}
-
-#[derive(Debug, Serialize)]
-pub struct UpdateInfo {
-    pub version: String,
-    pub notes: Option<String>,
-}
-
-/// Check the configured update endpoint. Returns None when already current.
-/// Errors with a friendly message when the updater isn't configured (no
-/// endpoint/pubkey in tauri.conf.json — see README).
-#[tauri::command]
-pub async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let updater = app
-        .updater()
-        .map_err(|e| format!("updater ยังไม่ได้ตั้งค่า (ดู README หัวข้อ Auto-update): {e}"))?;
-    match updater.check().await {
-        Ok(Some(u)) => Ok(Some(UpdateInfo {
-            version: u.version.clone(),
-            notes: u.body.clone(),
-        })),
-        Ok(None) => Ok(None),
-        Err(e) => Err(format!("ตรวจอัปเดตไม่สำเร็จ: {e}")),
-    }
-}
-
-/// Download + install the available update, then restart into the new build.
-/// (On Windows the installer closes the app itself.)
-#[tauri::command]
-pub async fn install_update(app: AppHandle) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
-        return Err("ไม่มีอัปเดตให้ติดตั้ง".into());
-    };
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|e| format!("ดาวน์โหลด/ติดตั้งอัปเดตไม่สำเร็จ: {e}"))?;
-    crate::persist_window_state(&app);
-    app.restart();
 }
 
 /// Probe each Jira endpoint the app relies on and report per-step results, so a

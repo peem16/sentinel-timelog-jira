@@ -345,7 +345,6 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::save_settings,
@@ -378,8 +377,6 @@ pub fn run() {
             commands::app_version,
             commands::get_autostart,
             commands::set_autostart,
-            commands::check_update,
-            commands::install_update,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
