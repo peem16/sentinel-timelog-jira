@@ -150,53 +150,34 @@ impl JiraClient {
             .ok_or_else(|| "หา Sprint field (gh-sprint) ไม่เจอ".to_string())
     }
 
-    /// Find the current sprint (id, name) by reading the sprint field of the
-    /// project's most recently updated issues — active preferred, else newest.
-    /// This sidesteps `openSprints()` (unreliable on sites with duplicate
-    /// "Sprint" fields) and the Agile API (needs jira-software scopes).
-    async fn current_sprint(
-        &self,
-        project_key: &str,
-        sprint_field: &str,
-    ) -> Result<Option<(u64, String)>, String> {
-        let jql = format!("project = {project_key} ORDER BY updated DESC");
-        let issues = self.search(&jql, &[sprint_field]).await?;
-        let mut active: Option<(u64, String)> = None;
-        let mut newest: Option<(u64, String)> = None;
-        for iss in &issues {
-            let Some(sprints) = iss["fields"][sprint_field].as_array() else {
-                continue;
-            };
-            for sp in sprints {
-                let Some(id) = sp["id"].as_u64() else { continue };
-                let name = sp["name"].as_str().unwrap_or_default().to_string();
-                let better = |cur: &Option<(u64, String)>| cur.as_ref().is_none_or(|(c, _)| id > *c);
-                if sp["state"].as_str() == Some("active") && better(&active) {
-                    active = Some((id, name.clone()));
-                }
-                if better(&newest) {
-                    newest = Some((id, name));
-                }
-            }
-        }
-        Ok(active.or(newest))
-    }
-
-    /// Issues in the project's current sprint. Returns (sprint_name, issues).
-    /// `sprint_field` comes from `sprint_field_id()` (cached by the caller).
+    /// Issues in the project's active **and future** sprints (never the backlog).
+    /// Returns (sprint_name, issues). `sprint_field` comes from `sprint_field_id()`
+    /// (cached by the caller).
     pub async fn sprint_issues(
         &self,
         project_key: &str,
         sprint_field: &str,
+        include_done: bool,
     ) -> Result<(Option<String>, Vec<IssueLite>), String> {
-        let Some((sprint_id, name)) = self.current_sprint(project_key, sprint_field).await? else {
+        // active + future sprints (same discovery as the Create-Task form). The
+        // backlog is naturally excluded — backlog issues carry no sprint, so they
+        // never match `sprint IN (...)`.
+        let sprints = self.list_sprints(project_key, sprint_field).await?;
+        if sprints.is_empty() {
             return Ok((None, vec![])); // no sprint found on recent issues
-        };
-        // query by numeric sprint id — robust against names with quotes/spaces.
-        // statusCategory != Done drops completed work (any "done"-type status).
-        // ORDER BY Rank ASC = the manual board/backlog order
+        }
+        // query by numeric sprint ids — robust against names with quotes/spaces.
+        // statusCategory != Done drops completed work (any "done"-type status);
+        // include_done keeps them (used by the auto page so PRs on already-Done
+        // tickets still map). ORDER BY Rank ASC = the manual board/backlog order
+        let ids = sprints
+            .iter()
+            .map(|s| s.id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let status_filter = if include_done { "" } else { " AND statusCategory != Done" };
         let jql = format!(
-            "project = {project_key} AND sprint = {sprint_id} AND statusCategory != Done ORDER BY Rank ASC"
+            "project = {project_key} AND sprint IN ({ids}){status_filter} ORDER BY Rank ASC"
         );
         let v = self
             .search(&jql, &["summary", "status", "assignee", "issuetype"])
@@ -210,6 +191,12 @@ impl JiraClient {
                     .is_none_or(|l| l <= 0)
             })
             .collect();
+        // label: join sprint names (active first, per list_sprints ordering)
+        let name = sprints
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" + ");
         Ok((
             Some(format!("{name} ({})", work_items.len())),
             Self::issues_from(&work_items),
@@ -353,11 +340,11 @@ impl JiraClient {
         Ok(if types.is_empty() { fallback() } else { types })
     }
 
-    /// Selectable sprints (active + future) for the Create-Task form, read from
-    /// the sprint field of the project's most recently updated issues — active
-    /// first, then future by id. Same approach as `current_sprint()` (avoids the
-    /// Agile API, which is unreliable on this site). Note: a future sprint only
-    /// appears here once at least one issue is assigned to it.
+    /// Selectable sprints (active + future) for the Create-Task form and the
+    /// log-time picker, read from the sprint field of the project's most recently
+    /// updated issues — active first, then future by id. Sidesteps the Agile API /
+    /// `openSprints()` (unreliable on this site with duplicate "Sprint" fields).
+    /// Note: a future sprint only appears here once ≥1 issue is assigned to it.
     pub async fn list_sprints(
         &self,
         project_key: &str,

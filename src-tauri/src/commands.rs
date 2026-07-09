@@ -102,10 +102,27 @@ pub async fn get_sprint_issues(
     let s = state.settings.read().await.clone();
     let client = oauth::jira_client(&app).await?;
     let sprint_field = cached_sprint_field(&app, &client).await?;
-    let (sprint_name, issues) = client.sprint_issues(&s.jira_project_key, &sprint_field).await?;
+    let (sprint_name, issues) = client
+        .sprint_issues(&s.jira_project_key, &sprint_field, false)
+        .await?;
     *state.issues.write().await = issues.clone();
     *state.sprint_name.write().await = sprint_name.clone();
     *state.issues_fetched_at.write().await = Some(Instant::now());
+    Ok(SprintIssues { sprint_name, issues })
+}
+
+/// Same active sprint as `get_sprint_issues`, but keeps Done tickets too. Used
+/// by the auto page so a PR whose Jira task is already Done can still be mapped
+/// (the main log-work picker stays Done-free via `get_sprint_issues`).
+#[tauri::command]
+pub async fn get_sprint_issues_all(app: AppHandle) -> Result<SprintIssues, String> {
+    let state = app.state::<AppState>();
+    let s = state.settings.read().await.clone();
+    let client = oauth::jira_client(&app).await?;
+    let sprint_field = cached_sprint_field(&app, &client).await?;
+    let (sprint_name, issues) = client
+        .sprint_issues(&s.jira_project_key, &sprint_field, true)
+        .await?;
     Ok(SprintIssues { sprint_name, issues })
 }
 
@@ -383,8 +400,9 @@ pub async fn get_reviewed_prs(app: AppHandle) -> Result<Vec<ReviewedPR>, String>
     let mut prs = client.reviewed_today(&s.github_org, &conn.login).await?;
 
     // map each PR to a Jira key from its title, enriching with the sprint
-    // summary when the key belongs to the current sprint
-    let issues = get_sprint_issues(app.clone(), None)
+    // summary when the key belongs to the current sprint. Include Done tickets:
+    // a PR is often reviewed/merged after its task has already moved to Done.
+    let issues = get_sprint_issues_all(app.clone())
         .await
         .map(|r| r.issues)
         .unwrap_or_default();
@@ -527,6 +545,16 @@ pub fn begin_drag() {
 #[tauri::command]
 pub fn end_drag() {
     crate::set_dragging(false);
+}
+
+/// Open an external URL (e.g. a PR link) in the user's default browser.
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    // guard against opening non-web schemes / local files
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("URL ไม่ถูกต้อง".into());
+    }
+    open::that(&url).map_err(|e| format!("เปิดเบราว์เซอร์ไม่ได้: {e}"))
 }
 
 #[tauri::command]
@@ -746,7 +774,7 @@ pub async fn diagnose_jira(app: AppHandle) -> Result<String, String> {
     match client.sprint_field_id().await {
         Ok(field) => {
             out.push_str(&format!("\n\n✓ Sprint field: {field}"));
-            match client.sprint_issues(&project, &field).await {
+            match client.sprint_issues(&project, &field, false).await {
                 Ok((name, is)) => out.push_str(&format!(
                     "\n✓ sprint OK — {} task ใน sprint: {}",
                     is.len(),

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TimeLog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.wisesight.timelog",
   "build": {
     "frontendDist": "../ui"
@@ -30,8 +30,8 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": [],
-      "pubkey": ""
+      "endpoints": ["https://github.com/peem16/sentinel-timelog-jira/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzNzNBQTRCOTA3NUEyMQpSV1FoV2dlNXBEbzNBYUkyU1ZKc1NkdzBzbGJyR0ZncHRKNk11T1BiYTg4dHhmeXBGclF4V211ago="
     }
   },
   "bundle": {
@@ -43,6 +43,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
   }
 }

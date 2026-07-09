@@ -5,6 +5,9 @@ const $ = (id) => document.getElementById(id);
 
 let settings = null;
 let issues = [];
+// auto page uses its own task list that INCLUDES Done tickets, so a PR whose
+// Jira task is already Done can still be mapped (main picker stays Done-free)
+let autoIssues = [];
 let autoSuggestions = [];
 let loggedKeys = new Set();
 let timerInterval = null;
@@ -164,9 +167,9 @@ function issueLabel(i) {
   return `${i.key} — ${i.summary}`;
 }
 
-function fillIssueSelect(sel, selectedKey) {
+function fillIssueSelect(sel, selectedKey, list = issues) {
   sel.innerHTML = '<option value="">— เลือก task —</option>';
-  for (const i of issues) {
+  for (const i of list) {
     const opt = document.createElement("option");
     opt.value = i.key;
     opt.textContent = issueLabel(i).slice(0, 80);
@@ -517,7 +520,7 @@ function renderAutoList() {
     const durDefault = s.event.duration_secs ? fmtHM(s.event.duration_secs) : "1:00";
     const badge =
       (done ? '<span class="done-badge">ลงแล้ว ✓</span>' : "") +
-      (isGh ? '<span class="src-badge">PR</span>' : "");
+      (isGh ? `<span class="src-badge pr-link" data-url="${esc(s.url)}" title="เปิด PR ในเบราว์เซอร์">PR</span>` : "");
     const dis = done ? "disabled" : "";
     div.innerHTML = `
       <div class="top">
@@ -531,7 +534,13 @@ function renderAutoList() {
         <input data-idx="${idx}" class="auto-dur" value="${durDefault}" title="เวลา เช่น 1:30" ${dis} />
       </div>`;
     box.appendChild(div);
-    fillIssueSelect(div.querySelector("select"), s.issue_key || "");
+    // auto page maps against the Done-inclusive list; fall back to the main
+    // sprint list if it hasn't loaded yet
+    fillIssueSelect(
+      div.querySelector("select"),
+      s.issue_key || "",
+      autoIssues.length ? autoIssues : issues
+    );
   });
   // nothing left to log → hide the confirm button
   $("btn-auto-confirm").style.display = anyPending ? "block" : "none";
@@ -557,52 +566,78 @@ function updateConfirmSummary() {
     : "ยืนยันลงเวลาที่เลือก";
 }
 
+let autoFetching = false;
 async function fetchAuto() {
+  // guard against overlapping fetches (double-click "โหลดใหม่", or opening the
+  // panel while a fetch is still in flight) — those would push the same items
+  // twice into autoSuggestions and render duplicates
+  if (autoFetching) return;
+  autoFetching = true;
   $("auto-list").innerHTML = '<div class="hint">กำลังโหลด…</div>';
-  autoSuggestions = [];
+  // build into a local list and assign once at the end, so a partially-filled
+  // autoSuggestions is never visible mid-fetch
+  const list = [];
   let err = "";
-  // Google Calendar events
   try {
-    const cal = await invoke("get_auto_suggestions");
-    cal.forEach((c) => autoSuggestions.push({ ...c, source: "calendar" }));
-  } catch (e) {
-    err = String(e);
-  }
-  // GitHub PRs reviewed today — normalize into the same auto-suggestion shape
-  // so renderAutoList()/confirmAuto() handle them without special-casing
-  try {
-    const prs = await invoke("get_reviewed_prs");
-    prs.forEach((pr) =>
-      autoSuggestions.push({
-        source: "github",
-        url: pr.url,
-        reviewed_at: pr.reviewed_at,
-        issue_key: pr.issue_key,
-        issue_summary: pr.issue_summary,
-        event: {
-          summary: `Review ${pr.repo}#${pr.number}: ${pr.title}`,
-          all_day: true,
-          start: null,
-          end: null,
-          duration_secs: 1800,
-        },
-      })
-    );
-  } catch (e) {
-    const msg = String(e);
-    // "not connected" is expected when GitHub is unused — don't nag about it
-    if (!msg.includes("ยังไม่ได้เชื่อมต่อ GitHub")) {
-      err = err ? `${err} | ${msg}` : msg;
+    // Done-inclusive task list for mapping PRs (esp. PRs on already-Done tickets)
+    try {
+      autoIssues = (await invoke("get_sprint_issues_all")).issues || [];
+    } catch {
+      autoIssues = [];
     }
+    // Google Calendar events
+    try {
+      const cal = await invoke("get_auto_suggestions");
+      cal.forEach((c) => list.push({ ...c, source: "calendar" }));
+    } catch (e) {
+      err = String(e);
+    }
+    // GitHub PRs reviewed today — normalize into the same auto-suggestion shape
+    // so renderAutoList()/confirmAuto() handle them without special-casing
+    try {
+      const prs = await invoke("get_reviewed_prs");
+      prs.forEach((pr) =>
+        list.push({
+          source: "github",
+          url: pr.url,
+          reviewed_at: pr.reviewed_at,
+          issue_key: pr.issue_key,
+          issue_summary: pr.issue_summary,
+          event: {
+            summary: `Review ${pr.repo}#${pr.number}: ${pr.title}`,
+            all_day: true,
+            start: null,
+            end: null,
+            duration_secs: 300, // PR review default = 5 นาที
+          },
+        })
+      );
+    } catch (e) {
+      const msg = String(e);
+      // "not connected" is expected when GitHub is unused — don't nag about it
+      if (!msg.includes("ยังไม่ได้เชื่อมต่อ GitHub")) {
+        err = err ? `${err} | ${msg}` : msg;
+      }
+    }
+    // safety net: drop any items sharing a dedupe key (same PR / same event)
+    const seen = new Set();
+    autoSuggestions = list.filter((s) => {
+      const k = logKeyOf(s);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    // which of these were already logged today? (survives re-fetch/restart)
+    try {
+      loggedKeys = new Set(await invoke("get_logged_keys"));
+    } catch {
+      loggedKeys = new Set();
+    }
+    renderAutoList();
+    if (err) setMsg("auto-msg", err, false);
+  } finally {
+    autoFetching = false;
   }
-  // which of these were already logged today? (survives re-fetch/restart)
-  try {
-    loggedKeys = new Set(await invoke("get_logged_keys"));
-  } catch {
-    loggedKeys = new Set();
-  }
-  renderAutoList();
-  if (err) setMsg("auto-msg", err, false);
 }
 
 async function confirmAuto() {
@@ -1031,6 +1066,13 @@ $("time-input").addEventListener("keydown", (e) => {
 /* live-update the confirm button as checkboxes / durations / tasks change */
 $("auto-list").addEventListener("change", updateConfirmSummary);
 $("auto-list").addEventListener("input", updateConfirmSummary);
+/* click a PR badge → open that pull request in the default browser */
+$("auto-list").addEventListener("click", (e) => {
+  const badge = e.target.closest(".pr-link");
+  if (!badge) return;
+  const url = badge.dataset.url;
+  if (url) invoke("open_url", { url }).catch(() => {});
+});
 $("btn-save-settings").onclick = saveSettings;
 $("btn-diagnose").onclick = async () => {
   const out = $("diagnose-out");

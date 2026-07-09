@@ -236,7 +236,8 @@ select option { background: var(--bg-solid); color: var(--text); }
 
 /* ---------- issue status line ---------- */
 .issue-status { font-size: 11px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; }
-.issue-status.ok { color: var(--good); }
+/* sprint-loaded line is hidden; only warn/err states surface to the user */
+.issue-status.ok { display: none; }
 .issue-status.warn { color: var(--warn); }
 .issue-status.err { color: var(--bad); }
 
@@ -356,6 +357,10 @@ select option { background: var(--bg-solid); color: var(--text); }
 .auto-item .src-badge {
   font-size: 9px; font-weight: 700; letter-spacing: 0.5px; color: #b7a6ff;
   border: 1px solid rgba(143, 120, 255, 0.6); border-radius: 5px; padding: 1px 4px; flex: none;
+}
+.auto-item .src-badge.pr-link { cursor: pointer; transition: background 0.12s, color 0.12s; }
+.auto-item .src-badge.pr-link:hover {
+  color: #fff; background: rgba(143, 120, 255, 0.35); border-color: rgba(143, 120, 255, 0.9);
 }
 
 /* ---------- settings ---------- */
