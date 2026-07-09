@@ -18,6 +18,9 @@
         <span class="title" data-tauri-drag-region>TimeLog</span>
       </div>
       <div class="head-right">
+        <button id="btn-open-create" class="icon-btn" title="สร้าง Task ใหม่">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
         <button id="btn-open-auto" class="icon-btn" title="Auto — ลงเวลาอัตโนมัติ">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 2 4 14 12 14 11 22 20 10 12 10 13 2"></polyline></svg>
         </button>
@@ -48,6 +51,7 @@
           <span id="today-note"></span>
           <span class="sum-eod" id="sum-eod" hidden>· เลิกงาน <span id="today-eod"></span></span>
         </div>
+        <div id="stack-badge" class="stack-badge" hidden></div>
       </div>
       <div class="ring">
         <svg width="60" height="60" viewBox="0 0 60 60">
@@ -150,12 +154,24 @@
           <label class="field"><span>เตือนทุกๆ (นาที, 0 = ปิด)</span><input id="s-remind-every" type="number" min="0" /></label>
           <label class="field"><span>เตือนก่อนหมดวัน (นาที, 0 = ปิด)</span><input id="s-remind-before" type="number" min="0" /></label>
           <label class="field"><span>เวลาเลิกงาน (HH:MM)</span><input id="s-eod" placeholder="18:00" /></label>
+          <label class="field check-field">
+            <input type="checkbox" id="s-lunch-enabled" />
+            <span>หักเวลาพักเที่ยงออกจากตัวจับเวลา</span>
+          </label>
+          <label class="field"><span>เริ่มพักเที่ยง (HH:MM)</span><input id="s-lunch-start" placeholder="12:00" /></label>
+          <label class="field"><span>เลิกพักเที่ยง (HH:MM)</span><input id="s-lunch-end" placeholder="13:00" /></label>
           <label class="field"><span>รีเฟรช tray ทุกๆ (นาที)</span><input id="s-refresh" type="number" min="1" /></label>
+          <label class="field check-field">
+            <input type="checkbox" id="s-stack-enabled" />
+            <span>โชว์ badge สะสม streak รายวัน</span>
+          </label>
+          <label class="field"><span>ชั่วโมงที่นับ 1 stack ต่อวัน</span><input id="s-stack-threshold" type="number" step="0.5" min="0.5" max="24" /></label>
         </details>
 
         <details>
           <summary>Hotkey &amp; Workspace</summary>
           <label class="field"><span>Hotkey เปิดหน้าต่าง</span><input id="s-hotkey" placeholder="Ctrl+Alt+L" /></label>
+          <label class="field"><span>Hotkey สร้าง Task (ว่าง = ปิด)</span><input id="s-create-hotkey" placeholder="Ctrl+Alt+K" /></label>
           <label class="field">
             <span>โฟลเดอร์โปรเจกต์ (บรรทัดละ path — ใช้ดู branch ของ Cursor/VS Code)</span>
             <textarea id="s-roots" rows="3" placeholder="D:\Work\Project"></textarea>
@@ -224,6 +240,34 @@
 
         <button id="btn-save-settings" class="btn primary">บันทึกการตั้งค่า</button>
         <div id="settings-msg" class="msg"></div>
+      </div>
+    </div>
+
+    <!-- ============ CREATE TASK OVERLAY ============ -->
+    <div id="overlay-createtask" class="overlay" hidden>
+      <div class="overlay-head" data-tauri-drag-region>
+        <span class="overlay-title">สร้าง Task</span>
+        <button id="btn-create-back" class="icon-btn" title="กลับ">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>
+        </button>
+      </div>
+      <div class="overlay-body">
+        <div class="field-row">
+          <label class="field field-narrow"><span>ประเภทงาน</span><select id="create-type"></select></label>
+          <label class="field"><span>Sprint</span><select id="create-sprint"></select></label>
+        </div>
+        <label class="field"><span>หัวข้อ</span><input id="create-summary" placeholder="สรุปงานสั้นๆ" /></label>
+        <div class="field">
+          <div class="field-head">
+            <span>รายละเอียด (ไม่บังคับ)</span>
+            <button id="btn-mic" class="icon-btn mic-btn" type="button" title="สั่งพิมพ์ด้วยเสียง (ภาษาไทย) — คลิก หรือกด Alt ค้าง">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"></rect><path d="M5 10a7 7 0 0 0 14 0"></path><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+            </button>
+          </div>
+          <textarea id="create-desc" rows="4" placeholder="รายละเอียดเพิ่มเติม"></textarea>
+        </div>
+        <button id="btn-create-submit" class="btn primary">บันทึกลง Jira</button>
+        <div id="create-msg" class="msg"></div>
       </div>
     </div>
   </div>

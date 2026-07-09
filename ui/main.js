@@ -9,6 +9,25 @@ let autoSuggestions = [];
 let loggedKeys = new Set();
 let timerInterval = null;
 let targetHours = 8;
+// lunch window (minutes-of-day) to pause the live timer readout; synced in loadSettings
+let lunchEnabled = true;
+let lunchStartMin = 12 * 60;
+let lunchEndMin = 13 * 60;
+
+/** minutes-of-day for a "HH:MM" string, or null if unparseable */
+function hhmmToMin(v) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((v || "").trim());
+  if (!m) return null;
+  return +m[1] * 60 + +m[2];
+}
+
+/** true if the current local time is inside the configured lunch window */
+function inLunchNow() {
+  if (!lunchEnabled || lunchEndMin <= lunchStartMin) return false;
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  return cur >= lunchStartMin && cur < lunchEndMin;
+}
 
 /* ================= helpers ================= */
 
@@ -90,6 +109,52 @@ async function refreshToday(force) {
   } catch (e) {
     renderToday(null);
     $("today-note").textContent = String(e);
+  }
+}
+
+/* ---- daily streak "stack" pixel-medal badge ---- */
+const sparkSvg = (c) =>
+  `<g fill="${c}"><rect x="18" y="16" width="8" height="4"/><rect x="14" y="20" width="16" height="4"/><rect x="18" y="24" width="8" height="4"/></g>`;
+
+// highest tier whose `min` <= current streak wins
+const STACK_TIERS = [
+  { min: 30, cls: "tier-accent", glow: "stk-glow-accent",
+    svg: `<g fill="#9dc4ff"><rect x="14" y="6" width="16" height="4"/><rect x="10" y="10" width="24" height="4"/></g><g fill="#6aa4ff"><rect x="10" y="14" width="24" height="4"/><rect x="12" y="18" width="20" height="4"/><rect x="14" y="22" width="16" height="4"/><rect x="16" y="26" width="12" height="4"/><rect x="18" y="30" width="8" height="4"/><rect x="20" y="34" width="4" height="4"/></g><rect x="16" y="10" width="6" height="4" fill="#eaf3ff"/>` },
+  { min: 14, cls: "tier-warn", glow: "stk-glow-warn",
+    svg: `<g fill="#ffcf6a"><rect x="8" y="14" width="4" height="10"/><rect x="20" y="14" width="4" height="10"/><rect x="32" y="14" width="4" height="10"/><rect x="12" y="10" width="4" height="14"/><rect x="28" y="10" width="4" height="14"/><rect x="8" y="24" width="28" height="4"/><rect x="8" y="28" width="28" height="4"/></g><rect x="9" y="14" width="4" height="4" fill="#ff7a8a"/><rect x="30" y="14" width="4" height="4" fill="#6aa4ff"/>` },
+  { min: 7, cls: "tier-good", glow: "stk-glow-good",
+    svg: `<g fill="#5ad6a0"><rect x="18" y="4" width="8" height="4"/><rect x="14" y="8" width="16" height="4"/><rect x="10" y="12" width="24" height="4"/><rect x="14" y="16" width="16" height="4"/><rect x="18" y="20" width="8" height="4"/></g><g fill="#2f8a63"><rect x="16" y="24" width="4" height="12"/><rect x="24" y="24" width="4" height="12"/><rect x="14" y="36" width="16" height="4"/></g><rect x="18" y="12" width="8" height="4" fill="#eafff5"/>` },
+  { min: 5, cls: "tier-accent", glow: "stk-glow-accent",
+    svg: `<g fill="#c4c7d2"><rect x="10" y="6" width="24" height="4"/><rect x="10" y="10" width="24" height="4"/><rect x="10" y="14" width="24" height="4"/><rect x="10" y="18" width="24" height="4"/><rect x="12" y="22" width="20" height="4"/><rect x="16" y="26" width="12" height="4"/><rect x="20" y="30" width="4" height="4"/></g><rect x="18" y="12" width="8" height="6" fill="#fff"/>` },
+  { min: 3, cls: "tier-warn", glow: "stk-glow-warn",
+    svg: `<g fill="#ffcf6a"><rect x="18" y="6" width="8" height="4"/><rect x="18" y="10" width="8" height="4"/><rect x="6" y="18" width="32" height="4"/><rect x="10" y="22" width="24" height="4"/><rect x="14" y="26" width="6" height="4"/><rect x="24" y="26" width="6" height="4"/><rect x="10" y="30" width="8" height="4"/><rect x="26" y="30" width="8" height="4"/></g>` },
+  { min: 1, cls: "tier-good", glow: "stk-glow-good", svg: sparkSvg("#5ad6a0") },
+  { min: 0, cls: "tier-dim", glow: "", svg: sparkSvg("#6b7793") },
+];
+
+function renderStack(status) {
+  const el = $("stack-badge");
+  if (!el) return;
+  if (!status || !status.enabled) {
+    el.hidden = true;
+    return;
+  }
+  const n = status.current | 0;
+  const t = STACK_TIERS.find((x) => n >= x.min) || STACK_TIERS[STACK_TIERS.length - 1];
+  const glowAttr = t.glow ? ` class="${t.glow}"` : "";
+  el.className = "stack-badge " + t.cls;
+  el.innerHTML =
+    `<svg width="20" height="20" viewBox="0 0 44 44"${glowAttr} aria-hidden="true">${t.svg}</svg>` +
+    `<span class="n">${n}</span><span class="u">day streak</span>`;
+  el.title = status.best ? `best ${status.best} วัน` : "";
+  el.hidden = false;
+}
+
+async function refreshStack() {
+  try {
+    renderStack(await invoke("get_stack"));
+  } catch (e) {
+    /* ignore */
   }
 }
 
@@ -279,6 +344,12 @@ function renderTimer(st) {
     disp.textContent = fmtHMS(elapsed);
     clearInterval(timerInterval);
     timerInterval = setInterval(() => {
+      // freeze the readout during lunch — the backend excludes it too
+      if (inLunchNow()) {
+        disp.title = (st.issue_key || "") + " (พักเที่ยง)";
+        return;
+      }
+      disp.title = st.issue_key || "";
       elapsed += 1;
       disp.textContent = fmtHMS(elapsed);
     }, 1000);
@@ -331,8 +402,80 @@ async function submitLog() {
     $("time-input").value = "";
     $("comment-input").value = "";
     setMsg("log-msg", `ลงเวลา ${fmtHM(secs)} ที่ ${key} แล้ว ✓`, true);
+    // refresh the rest of the panel (a task moved to Done drops off the list)
+    refreshToday(true);
+    loadIssues(true);
+    loadBranches();
   } catch (e) {
     setMsg("log-msg", String(e), false);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ================= create task ================= */
+let taskMetaLoaded = false;
+async function loadTaskFormMeta(force) {
+  if (taskMetaLoaded && !force) return;
+  const typeSel = $("create-type");
+  const sprintSel = $("create-sprint");
+  typeSel.innerHTML = `<option value="">กำลังโหลด…</option>`;
+  sprintSel.innerHTML = `<option value="">กำลังโหลด…</option>`;
+  try {
+    const meta = await invoke("get_task_form_meta");
+    typeSel.innerHTML = "";
+    (meta.work_types || []).forEach((t) => {
+      const o = document.createElement("option");
+      o.value = t.id || "";
+      o.dataset.name = t.name;
+      o.textContent = t.name;
+      typeSel.appendChild(o);
+    });
+    sprintSel.innerHTML = "";
+    (meta.sprints || []).forEach((sp) => {
+      const o = document.createElement("option");
+      o.value = String(sp.id);
+      o.textContent = sp.state === "active" ? `${sp.name} (active)` : sp.name;
+      sprintSel.appendChild(o);
+    });
+    if (!meta.sprints || !meta.sprints.length) {
+      sprintSel.innerHTML = `<option value="">— ไม่พบ sprint —</option>`;
+    } else if (meta.default_sprint_id != null) {
+      sprintSel.value = String(meta.default_sprint_id);
+    }
+    setMsg("create-msg", "", true);
+    taskMetaLoaded = true;
+  } catch (e) {
+    typeSel.innerHTML = `<option value="">Task</option><option value="">Bug</option><option value="">Support</option>`;
+    sprintSel.innerHTML = `<option value="">—</option>`;
+    setMsg("create-msg", String(e), false);
+  }
+}
+
+async function submitCreateTask() {
+  const summary = $("create-summary").value.trim();
+  if (!summary) return setMsg("create-msg", "กรอกหัวข้อก่อน", false);
+  const typeOpt = $("create-type").selectedOptions[0];
+  const sprintVal = $("create-sprint").value;
+  const btn = $("btn-create-submit");
+  btn.disabled = true;
+  try {
+    const key = await invoke("create_issue", {
+      issueTypeId: typeOpt ? typeOpt.value : "",
+      issueTypeName: typeOpt ? typeOpt.dataset.name || typeOpt.textContent : "",
+      summary,
+      description: $("create-desc").value,
+      sprintId: sprintVal ? Number(sprintVal) : null,
+    });
+    setMsg("create-msg", `สร้าง ${key} แล้ว ✓`, true);
+    stopMic();
+    $("create-summary").value = "";
+    $("create-desc").value = "";
+    // the new task belongs in the current sprint — refresh the picker
+    loadIssues(true);
+    setTimeout(closeOverlays, 1000);
+  } catch (e) {
+    setMsg("create-msg", String(e), false);
   } finally {
     btn.disabled = false;
   }
@@ -548,11 +691,17 @@ function fillSettingsForm(s) {
   $("s-gh-id").value = s.github_client_id || "";
   $("s-gh-secret").value = s.github_client_secret || "";
   $("s-hours").value = s.work_hours_per_day;
+  $("s-stack-enabled").checked = s.stack_enabled !== false;
+  $("s-stack-threshold").value = s.stack_threshold_hours ?? 6;
   $("s-remind-every").value = s.remind_every_minutes;
   $("s-remind-before").value = s.remind_before_end_minutes;
   $("s-eod").value = s.end_of_day;
+  $("s-lunch-enabled").checked = s.lunch_enabled !== false;
+  $("s-lunch-start").value = s.lunch_start || "12:00";
+  $("s-lunch-end").value = s.lunch_end || "13:00";
   $("s-refresh").value = s.refresh_interval_minutes;
   $("s-hotkey").value = s.hotkey;
+  $("s-create-hotkey").value = s.create_hotkey || "";
   $("s-roots").value = (s.workspace_roots || []).join("\n");
   $("s-ics").value = s.ics_url;
   renderRules(s.auto_rules || []);
@@ -566,6 +715,9 @@ function fillSettingsForm(s) {
 async function loadSettings() {
   settings = await invoke("get_settings");
   targetHours = settings.work_hours_per_day;
+  lunchEnabled = settings.lunch_enabled !== false;
+  lunchStartMin = hhmmToMin(settings.lunch_start) ?? 12 * 60;
+  lunchEndMin = hhmmToMin(settings.lunch_end) ?? 13 * 60;
   fillSettingsForm(settings);
 }
 
@@ -576,11 +728,17 @@ async function saveSettings() {
     jira_api_token: $("s-jira-token").value.trim(),
     jira_project_key: $("s-jira-project").value.trim() || "MDT",
     work_hours_per_day: +$("s-hours").value || 8,
+    stack_enabled: $("s-stack-enabled").checked,
+    stack_threshold_hours: +$("s-stack-threshold").value || 6,
     remind_every_minutes: Math.max(0, +$("s-remind-every").value || 0),
     remind_before_end_minutes: Math.max(0, +$("s-remind-before").value || 0),
     end_of_day: $("s-eod").value.trim() || "18:00",
+    lunch_enabled: $("s-lunch-enabled").checked,
+    lunch_start: $("s-lunch-start").value.trim() || "12:00",
+    lunch_end: $("s-lunch-end").value.trim() || "13:00",
     refresh_interval_minutes: Math.max(1, +$("s-refresh").value || 15),
     hotkey: $("s-hotkey").value.trim(),
+    create_hotkey: $("s-create-hotkey").value.trim(),
     workspace_roots: $("s-roots").value.split("\n").map((s) => s.trim()).filter(Boolean),
     ics_url: $("s-ics").value.trim(),
     auto_rules: readRules(),
@@ -600,6 +758,7 @@ async function saveSettings() {
     setMsg("settings-msg", "บันทึกแล้ว ✓", true);
     loadIssues(true);
     refreshToday(true);
+    refreshStack();
   } catch (e) {
     setMsg("settings-msg", String(e), false);
   }
@@ -720,17 +879,119 @@ function openOverlay(name) {
   if (!el) return;
   el.hidden = false;
   if (name === "auto" && !autoSuggestions.length) fetchAuto();
+  if (name === "createtask") loadTaskFormMeta();
 }
 function closeOverlays() {
+  if (typeof stopMic === "function") stopMic();
   document.querySelectorAll(".overlay").forEach((el) => (el.hidden = true));
 }
 function anyOverlayOpen() {
   return [...document.querySelectorAll(".overlay")].some((el) => !el.hidden);
 }
+$("btn-open-create").onclick = () => openOverlay("createtask");
 $("btn-open-auto").onclick = () => openOverlay("auto");
 $("btn-open-settings").onclick = () => openOverlay("settings");
 $("btn-auto-back").onclick = closeOverlays;
 $("btn-settings-back").onclick = closeOverlays;
+$("btn-create-back").onclick = closeOverlays;
+$("btn-create-submit").onclick = submitCreateTask;
+
+/* voice dictation (Thai) for the task-description field */
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let micOn = false; // user intends to keep listening
+let micBase = ""; // textarea value captured when dictation started
+let micFinal = ""; // finalized transcript accumulated this session
+
+function renderMic(on) {
+  const btn = $("btn-mic");
+  btn.classList.toggle("recording", on);
+  btn.title = on
+    ? "กำลังฟัง… คลิก หรือปล่อย Alt เพื่อหยุด"
+    : "สั่งพิมพ์ด้วยเสียง (ภาษาไทย) — คลิก หรือกด Alt ค้าง";
+}
+function ensureRecognition() {
+  if (recognition) return recognition;
+  if (!SpeechRec) return null;
+  const rec = new SpeechRec();
+  rec.lang = "th-TH";
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.onresult = (e) => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const txt = e.results[i][0].transcript;
+      if (e.results[i].isFinal) micFinal += txt;
+      else interim += txt;
+    }
+    const desc = $("create-desc");
+    desc.value = micBase + micFinal + interim;
+    desc.dispatchEvent(new Event("input"));
+  };
+  rec.onend = () => {
+    // the service auto-stops on silence — keep going if the user hasn't toggled off
+    if (micOn) { try { rec.start(); } catch (_) {} }
+    else renderMic(false);
+  };
+  rec.onerror = (e) => {
+    if (e.error === "no-speech" || e.error === "aborted") return; // transient — onend will restart
+    micOn = false;
+    renderMic(false);
+    const map = {
+      "not-allowed": "ไม่ได้รับสิทธิ์ใช้ไมโครโฟน",
+      "service-not-allowed": "ระบบรู้จำเสียงไม่พร้อมใช้งาน",
+      "audio-capture": "ไม่พบไมโครโฟน",
+      "network": "เชื่อมต่ออินเทอร์เน็ตไม่ได้ (ต้องต่อเน็ตเพื่อแปลงเสียง)",
+    };
+    setMsg("create-msg", map[e.error] || ("สั่งพิมพ์ด้วยเสียงล้มเหลว: " + e.error), false);
+  };
+  recognition = rec;
+  return rec;
+}
+function startMic() {
+  const rec = ensureRecognition();
+  if (!rec) return;
+  micBase = $("create-desc").value;
+  if (micBase && !/\s$/.test(micBase)) micBase += " ";
+  micFinal = "";
+  micOn = true;
+  try { rec.start(); } catch (_) {}
+  renderMic(true);
+}
+function stopMic() {
+  micOn = false;
+  if (recognition) { try { recognition.stop(); } catch (_) {} }
+  renderMic(false);
+}
+if (!SpeechRec) {
+  const b = $("btn-mic");
+  b.disabled = true;
+  b.title = "เบราว์เซอร์ไม่รองรับการสั่งพิมพ์ด้วยเสียง";
+} else {
+  $("btn-mic").onclick = () => (micOn ? stopMic() : startMic());
+
+  /* push-to-talk: hold Alt (while Create Task is open + app focused) to dictate */
+  let altPtt = false;
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Alt" || e.repeat) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return; // plain Alt only (avoid Ctrl+Alt+K clash)
+    if ($("overlay-createtask").hidden) return; // only on the Create Task page
+    if (micOn) return; // already listening (e.g. toggled via the button) — leave it
+    e.preventDefault();
+    altPtt = true;
+    startMic();
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.key !== "Alt" || !altPtt) return;
+    e.preventDefault();
+    altPtt = false;
+    stopMic();
+  });
+  // Alt+Tab / losing focus won't fire keyup — stop so the mic isn't stuck on
+  window.addEventListener("blur", () => {
+    if (altPtt) { altPtt = false; stopMic(); }
+  });
+}
 
 /* collapsible "เพิ่มรายละเอียด" (comment) */
 $("btn-details").onclick = () => {
@@ -758,7 +1019,7 @@ $("btn-pin").onclick = async () => {
   }
 };
 invoke("get_pinned").then(renderPin).catch(() => {});
-$("btn-refresh").onclick = () => { refreshToday(true); loadIssues(true); loadBranches(); };
+$("btn-refresh").onclick = () => { refreshToday(true); loadIssues(true); loadBranches(); taskMetaLoaded = false; };
 $("btn-log").onclick = submitLog;
 $("btn-timer").onclick = toggleTimer;
 $("btn-auto-fetch").onclick = fetchAuto;
@@ -848,12 +1109,39 @@ window.addEventListener("mouseup", () => invoke("end_drag"));
 /* refresh data every time the panel opens */
 listen("panel-shown", () => {
   refreshToday(false);
+  refreshStack();
   loadIssues(false);
   loadBranches();
   invoke("timer_status").then(renderTimer).catch(() => {});
 });
 
 listen("total-updated", (ev) => renderToday(ev.payload));
+listen("stack-updated", (ev) => renderStack(ev.payload));
+
+/* Ctrl+Alt+K global hotkey — backend shows the window and asks us to open the
+   Create-Task form. Focus the summary field so the user can type right away. */
+listen("open-create", () => {
+  openOverlay("createtask");
+  setTimeout(() => $("create-summary").focus(), 60);
+});
+
+/* end of work day: backend already showed + pinned the panel. Stop the timer,
+   keeping the elapsed prefilled so the user can log it. */
+listen("work-ended", async () => {
+  try {
+    const st = await invoke("timer_status");
+    if (st.running) {
+      const stopped = await invoke("timer_stop");
+      renderTimer({ running: false });
+      setIssue(stopped.issue_key || "");
+      $("time-input").value = fmtHM(Math.max(60, stopped.elapsed_secs));
+    }
+    setMsg("log-msg", "หมดเวลาทำงานแล้ว — กดบันทึกเพื่อลงเวลาที่จับไว้", true);
+    invoke("get_pinned").then(renderPin).catch(() => {});
+  } catch (e) {
+    /* ignore */
+  }
+});
 
 /* ================= init ================= */
 
@@ -861,6 +1149,7 @@ listen("total-updated", (ev) => renderToday(ev.payload));
   await loadSettings();
   renderToday(null);
   refreshToday(false);
+  refreshStack();
   loadIssues(false);
   loadBranches();
   loadConnStatus();

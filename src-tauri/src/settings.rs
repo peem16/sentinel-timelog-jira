@@ -18,14 +18,26 @@ pub struct Settings {
     pub jira_project_key: String,
     /// Target working hours per day
     pub work_hours_per_day: f64,
+    /// Show the daily streak "stack" badge on the summary card
+    pub stack_enabled: bool,
+    /// Hours that must be logged on a working day to count a stack (+1 streak)
+    pub stack_threshold_hours: f64,
     /// Remind every N minutes when hours are not complete (0 = off)
     pub remind_every_minutes: u64,
     /// Remind N minutes before end of day if incomplete (0 = off)
     pub remind_before_end_minutes: u64,
     /// "HH:MM" local time
     pub end_of_day: String,
+    /// Exclude the lunch window from the running timer
+    pub lunch_enabled: bool,
+    /// "HH:MM" local time — start of lunch break
+    pub lunch_start: String,
+    /// "HH:MM" local time — end of lunch break
+    pub lunch_end: String,
     /// Global hotkey to toggle the panel
     pub hotkey: String,
+    /// Global hotkey to open the Create-Task form (empty = off)
+    pub create_hotkey: String,
     /// Directories that contain git repos (scanned 1 level deep)
     pub workspace_roots: Vec<String>,
     /// Google Calendar secret ICS url
@@ -52,10 +64,16 @@ impl Default for Settings {
             jira_api_token: String::new(),
             jira_project_key: "MDT".into(),
             work_hours_per_day: 8.0,
+            stack_enabled: true,
+            stack_threshold_hours: 6.0,
             remind_every_minutes: 120,
             remind_before_end_minutes: 30,
             end_of_day: "18:00".into(),
+            lunch_enabled: true,
+            lunch_start: "12:00".into(),
+            lunch_end: "13:00".into(),
             hotkey: "Ctrl+Alt+L".into(),
+            create_hotkey: "Ctrl+Alt+K".into(),
             workspace_roots: vec![],
             ics_url: String::new(),
             auto_rules: vec![],

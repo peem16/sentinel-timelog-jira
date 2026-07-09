@@ -18,6 +18,19 @@ pub struct ProjectLite {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkType {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SprintLite {
+    pub id: u64,
+    pub name: String,
+    pub state: String,
+}
+
 enum JiraAuth {
     Basic { email: String, token: String },
     Bearer(String),
@@ -291,19 +304,144 @@ impl JiraClient {
             "started": started,
         });
         if !comment.trim().is_empty() {
-            body["comment"] = json!({
-                "type": "doc",
-                "version": 1,
-                "content": [{
-                    "type": "paragraph",
-                    "content": [{ "type": "text", "text": comment.trim() }]
-                }]
-            });
+            body["comment"] = adf(comment);
         }
         self.post(&format!("/rest/api/3/issue/{issue_key}/worklog"), body)
             .await?;
         Ok(())
     }
+
+    /// Standard issue types available when creating an issue in `project_key`
+    /// (Task / Bug / Support / …). Drops sub-tasks and epics so the list matches
+    /// what the Create-Task form should offer. Falls back to a fixed list if the
+    /// createmeta call fails or returns nothing usable.
+    pub async fn issue_types(&self, project_key: &str) -> Result<Vec<WorkType>, String> {
+        let fallback = || {
+            ["Task", "Bug", "Support"]
+                .iter()
+                .map(|n| WorkType { id: String::new(), name: n.to_string() })
+                .collect::<Vec<_>>()
+        };
+        let res = match self
+            .get(
+                &format!("/rest/api/3/issue/createmeta/{project_key}/issuetypes"),
+                &[],
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(_) => return Ok(fallback()),
+        };
+        let types: Vec<WorkType> = res["values"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter(|t| {
+                        t["subtask"].as_bool() != Some(true)
+                            && t["hierarchyLevel"].as_i64().is_none_or(|l| l == 0)
+                    })
+                    .filter_map(|t| {
+                        let name = t["name"].as_str()?.to_string();
+                        Some(WorkType {
+                            id: t["id"].as_str().unwrap_or_default().to_string(),
+                            name,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(if types.is_empty() { fallback() } else { types })
+    }
+
+    /// Selectable sprints (active + future) for the Create-Task form, read from
+    /// the sprint field of the project's most recently updated issues — active
+    /// first, then future by id. Same approach as `current_sprint()` (avoids the
+    /// Agile API, which is unreliable on this site). Note: a future sprint only
+    /// appears here once at least one issue is assigned to it.
+    pub async fn list_sprints(
+        &self,
+        project_key: &str,
+        sprint_field: &str,
+    ) -> Result<Vec<SprintLite>, String> {
+        let jql = format!("project = {project_key} ORDER BY updated DESC");
+        let issues = self.search(&jql, &[sprint_field]).await?;
+        let mut seen = std::collections::HashSet::new();
+        let mut sprints: Vec<SprintLite> = Vec::new();
+        for iss in &issues {
+            let Some(list) = iss["fields"][sprint_field].as_array() else {
+                continue;
+            };
+            for sp in list {
+                let Some(id) = sp["id"].as_u64() else { continue };
+                let state = sp["state"].as_str().unwrap_or_default().to_string();
+                if state != "active" && state != "future" {
+                    continue;
+                }
+                if seen.insert(id) {
+                    sprints.push(SprintLite {
+                        id,
+                        name: sp["name"].as_str().unwrap_or_default().to_string(),
+                        state,
+                    });
+                }
+            }
+        }
+        // active before future; within each group, lower id first
+        sprints.sort_by(|a, b| {
+            let rank = |s: &str| if s == "active" { 0 } else { 1 };
+            rank(&a.state).cmp(&rank(&b.state)).then(a.id.cmp(&b.id))
+        });
+        Ok(sprints)
+    }
+
+    /// Create an issue and return its new key (e.g. "MDT-123"). `sprint_id`, when
+    /// given, is written to the gh-sprint custom field so the issue lands in that
+    /// sprint. `issue_type_id` is preferred; if empty, falls back to type by name.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_issue(
+        &self,
+        project_key: &str,
+        issue_type_id: &str,
+        issue_type_name: &str,
+        summary: &str,
+        description: &str,
+        sprint_id: Option<u64>,
+        sprint_field: &str,
+    ) -> Result<String, String> {
+        let issuetype = if issue_type_id.is_empty() {
+            json!({ "name": issue_type_name })
+        } else {
+            json!({ "id": issue_type_id })
+        };
+        let mut fields = json!({
+            "project": { "key": project_key },
+            "summary": summary.trim(),
+            "issuetype": issuetype,
+        });
+        if !description.trim().is_empty() {
+            fields["description"] = adf(description);
+        }
+        if let Some(sid) = sprint_id {
+            fields[sprint_field] = json!(sid);
+        }
+        let resp = self.post("/rest/api/3/issue", json!({ "fields": fields })).await?;
+        resp["key"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "สร้าง issue สำเร็จแต่อ่าน key ไม่ได้".to_string())
+    }
+}
+
+/// Wrap plain text in a minimal Atlassian Document Format doc (single paragraph).
+fn adf(text: &str) -> Value {
+    json!({
+        "type": "doc",
+        "version": 1,
+        "content": [{
+            "type": "paragraph",
+            "content": [{ "type": "text", "text": text.trim() }]
+        }]
+    })
 }
 
 /// Convert a Jira "started" timestamp to its local-date string (YYYY-MM-DD).

@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
@@ -6,7 +6,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::calendar::{self, CalEvent};
 use crate::github::{self, ReviewedPR};
 use crate::gitscan::{self, BranchInfo};
-use crate::jira::{IssueLite, JiraClient, ProjectLite};
+use crate::jira::{IssueLite, JiraClient, ProjectLite, SprintLite, WorkType};
 use crate::logged;
 use crate::oauth;
 use crate::settings::{self, Settings};
@@ -54,14 +54,19 @@ pub async fn save_settings(
     state: State<'_, AppState>,
     new_settings: Settings,
 ) -> Result<(), String> {
-    let old_hotkey = state.settings.read().await.hotkey.clone();
+    let (old_hotkey, old_create_hotkey) = {
+        let s = state.settings.read().await;
+        (s.hotkey.clone(), s.create_hotkey.clone())
+    };
     settings::save(&state.config_dir, &new_settings)?;
     *state.settings.write().await = new_settings.clone();
     // invalidate caches that depend on settings (project / manual creds may change)
     invalidate_jira_caches(&state).await;
 
-    let hotkey_result = if old_hotkey != new_settings.hotkey {
-        crate::register_hotkey(&app, &new_settings.hotkey)
+    let hotkey_result = if old_hotkey != new_settings.hotkey
+        || old_create_hotkey != new_settings.create_hotkey
+    {
+        crate::register_hotkey(&app, &new_settings.hotkey, &new_settings.create_hotkey)
     } else {
         Ok(())
     };
@@ -104,6 +109,68 @@ pub async fn get_sprint_issues(
     Ok(SprintIssues { sprint_name, issues })
 }
 
+#[derive(Debug, Serialize)]
+pub struct TaskFormMeta {
+    pub work_types: Vec<WorkType>,
+    pub sprints: Vec<SprintLite>,
+    pub default_sprint_id: Option<u64>,
+}
+
+/// Work types + selectable sprints for the Create-Task form.
+#[tauri::command]
+pub async fn get_task_form_meta(app: AppHandle) -> Result<TaskFormMeta, String> {
+    let state = app.state::<AppState>();
+    let s = state.settings.read().await.clone();
+    let client = oauth::jira_client(&app).await?;
+    let sprint_field = cached_sprint_field(&app, &client).await?;
+    let work_types = client.issue_types(&s.jira_project_key).await?;
+    let sprints = client.list_sprints(&s.jira_project_key, &sprint_field).await?;
+    let default_sprint_id = sprints
+        .iter()
+        .find(|sp| sp.state == "active")
+        .or_else(|| sprints.first())
+        .map(|sp| sp.id);
+    Ok(TaskFormMeta {
+        work_types,
+        sprints,
+        default_sprint_id,
+    })
+}
+
+/// Create a Jira issue and return its new key. Refreshes the sprint-issue cache
+/// so the new task shows up in the picker.
+#[tauri::command]
+pub async fn create_issue(
+    app: AppHandle,
+    issue_type_id: String,
+    issue_type_name: String,
+    summary: String,
+    description: String,
+    sprint_id: Option<u64>,
+) -> Result<String, String> {
+    if summary.trim().is_empty() {
+        return Err("กรอกหัวข้อก่อน".into());
+    }
+    let state = app.state::<AppState>();
+    let s = state.settings.read().await.clone();
+    let client = oauth::jira_client(&app).await?;
+    let sprint_field = cached_sprint_field(&app, &client).await?;
+    let key = client
+        .create_issue(
+            &s.jira_project_key,
+            &issue_type_id,
+            &issue_type_name,
+            &summary,
+            &description,
+            sprint_id,
+            &sprint_field,
+        )
+        .await?;
+    // force the sprint-issue list to refetch next time so the new task appears
+    *state.issues_fetched_at.write().await = None;
+    Ok(key)
+}
+
 #[tauri::command]
 pub async fn get_today_total(app: AppHandle, force: Option<bool>) -> Result<u64, String> {
     let state = app.state::<AppState>();
@@ -119,6 +186,20 @@ pub async fn get_today_total(app: AppHandle, force: Option<bool>) -> Result<u64,
     *state.today_secs.write().await = Some(total);
     crate::update_tray(&app, Some(total), s.work_hours_per_day);
     Ok(total)
+}
+
+#[tauri::command]
+pub async fn get_stack(state: State<'_, AppState>) -> Result<crate::streak::StackStatus, String> {
+    let s = state.settings.read().await.clone();
+    if !s.stack_enabled {
+        return Ok(crate::streak::StackStatus {
+            current: 0,
+            best: 0,
+            qualified_today: false,
+            enabled: false,
+        });
+    }
+    Ok(crate::streak::status(&state.config_dir, true))
 }
 
 #[tauri::command]
@@ -327,6 +408,46 @@ pub struct TimerStatus {
     pub started_at: Option<String>,
 }
 
+/// Seconds of the lunch break that fall inside `[start, now]`, so the timer can
+/// exclude it. Handles the rare multi-day session by summing each day's window.
+fn lunch_overlap_secs(start: DateTime<Local>, now: DateTime<Local>, s: &Settings) -> u64 {
+    if !s.lunch_enabled || now <= start {
+        return 0;
+    }
+    let (Some(ls), Some(le)) = (
+        crate::parse_hhmm(&s.lunch_start),
+        crate::parse_hhmm(&s.lunch_end),
+    ) else {
+        return 0;
+    };
+    if le <= ls {
+        return 0;
+    }
+    let mut total: i64 = 0;
+    let mut day = start.date_naive();
+    let last = now.date_naive();
+    loop {
+        if let (Some(lo), Some(hi)) = (
+            Local.from_local_datetime(&day.and_time(ls)).single(),
+            Local.from_local_datetime(&day.and_time(le)).single(),
+        ) {
+            let ov_lo = start.max(lo);
+            let ov_hi = now.min(hi);
+            if ov_hi > ov_lo {
+                total += (ov_hi - ov_lo).num_seconds();
+            }
+        }
+        if day >= last {
+            break;
+        }
+        match day.succ_opt() {
+            Some(d) => day = d,
+            None => break,
+        }
+    }
+    total.max(0) as u64
+}
+
 #[tauri::command]
 pub async fn timer_start(state: State<'_, AppState>, issue_key: String) -> Result<TimerStatus, String> {
     let mut timer = state.timer.lock().await;
@@ -349,26 +470,36 @@ pub async fn timer_start(state: State<'_, AppState>, issue_key: String) -> Resul
 
 #[tauri::command]
 pub async fn timer_stop(state: State<'_, AppState>) -> Result<TimerStatus, String> {
+    let s = state.settings.read().await.clone();
     let mut timer = state.timer.lock().await;
     match timer.take() {
-        Some(t) => Ok(TimerStatus {
-            running: false,
-            issue_key: Some(t.issue_key.clone()),
-            elapsed_secs: t.started_instant.elapsed().as_secs(),
-            started_at: Some(t.started_at.format("%Y-%m-%dT%H:%M:%S%.3f%z").to_string()),
-        }),
+        Some(t) => {
+            let raw = t.started_instant.elapsed().as_secs();
+            let lunch = lunch_overlap_secs(t.started_at, Local::now(), &s);
+            Ok(TimerStatus {
+                running: false,
+                issue_key: Some(t.issue_key.clone()),
+                elapsed_secs: raw.saturating_sub(lunch),
+                started_at: Some(t.started_at.format("%Y-%m-%dT%H:%M:%S%.3f%z").to_string()),
+            })
+        }
         None => Err("ไม่มี timer ที่กำลังทำงาน".into()),
     }
 }
 
 #[tauri::command]
 pub async fn timer_status(state: State<'_, AppState>) -> Result<TimerStatus, String> {
+    let s = state.settings.read().await.clone();
     let timer = state.timer.lock().await;
     Ok(match &*timer {
         Some(t) => TimerStatus {
             running: true,
             issue_key: Some(t.issue_key.clone()),
-            elapsed_secs: t.started_instant.elapsed().as_secs(),
+            elapsed_secs: t
+                .started_instant
+                .elapsed()
+                .as_secs()
+                .saturating_sub(lunch_overlap_secs(t.started_at, Local::now(), &s)),
             started_at: Some(t.started_at.to_rfc3339()),
         },
         None => TimerStatus {

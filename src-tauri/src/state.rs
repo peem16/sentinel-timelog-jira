@@ -33,6 +33,8 @@ pub struct AppState {
     pub timer: Mutex<Option<ActiveTimer>>,
     pub last_periodic_notify: Mutex<Option<Instant>>,
     pub eod_notified_on: Mutex<Option<NaiveDate>>,
+    /// Guard so the end-of-day stop (notify + stop timer + show) fires once/day
+    pub work_ended_on: Mutex<Option<NaiveDate>>,
 }
 
 impl AppState {
@@ -56,6 +58,7 @@ impl AppState {
             timer: Mutex::new(None),
             last_periodic_notify: Mutex::new(None),
             eod_notified_on: Mutex::new(None),
+            work_ended_on: Mutex::new(None),
         }
     }
 }

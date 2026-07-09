@@ -7,6 +7,7 @@ mod logged;
 mod oauth;
 mod settings;
 mod state;
+mod streak;
 mod tray;
 mod winstate;
 
@@ -164,6 +165,11 @@ pub async fn refresh_total_and_tray(app: AppHandle) {
             *state.today_secs.write().await = Some(total);
             update_tray(&app, Some(total), s.work_hours_per_day);
             let _ = app.emit("total-updated", total);
+            if s.stack_enabled {
+                let threshold = (s.stack_threshold_hours * 3600.0) as u64;
+                let st = streak::evaluate(&state.config_dir, threshold, total);
+                let _ = app.emit("stack-updated", st);
+            }
         }
         Err(_) => {
             let cached = *state.today_secs.read().await;
@@ -172,18 +178,31 @@ pub async fn refresh_total_and_tray(app: AppHandle) {
     }
 }
 
-pub fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
+pub fn register_hotkey(app: &AppHandle, hotkey: &str, create_hotkey: &str) -> Result<(), String> {
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
-    if hotkey.trim().is_empty() {
-        return Ok(());
+    if !hotkey.trim().is_empty() {
+        gs.on_shortcut(hotkey, move |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                toggle_window(app);
+            }
+        })
+        .map_err(|e| format!("ลงทะเบียน hotkey '{hotkey}' ไม่ได้ (อาจชนกับโปรแกรมอื่น): {e}"))?;
     }
-    gs.on_shortcut(hotkey, move |app, _shortcut, event| {
-        if event.state == ShortcutState::Pressed {
-            toggle_window(app);
-        }
-    })
-    .map_err(|e| format!("ลงทะเบียน hotkey '{hotkey}' ไม่ได้ (อาจชนกับโปรแกรมอื่น): {e}"))
+    if !create_hotkey.trim().is_empty() {
+        gs.on_shortcut(create_hotkey, move |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                if let Some(win) = app.get_webview_window("main") {
+                    show_window(app, &win);
+                    let _ = win.emit("open-create", ());
+                }
+            }
+        })
+        .map_err(|e| {
+            format!("ลงทะเบียน hotkey สร้าง task '{create_hotkey}' ไม่ได้ (อาจชนกับโปรแกรมอื่น): {e}")
+        })?;
+    }
+    Ok(())
 }
 
 fn notify(app: &AppHandle, title: &str, body: &str) {
@@ -195,7 +214,7 @@ fn notify(app: &AppHandle, title: &str, body: &str) {
         .show();
 }
 
-fn parse_hhmm(v: &str) -> Option<NaiveTime> {
+pub(crate) fn parse_hhmm(v: &str) -> Option<NaiveTime> {
     let (h, m) = v.split_once(':')?;
     NaiveTime::from_hms_opt(h.trim().parse().ok()?, m.trim().parse().ok()?, 0)
 }
@@ -227,6 +246,34 @@ async fn scheduler(app: AppHandle) {
                 && !s.jira_api_token.is_empty());
         if !jira_configured {
             continue;
+        }
+
+        // past end of day → stop working: once per day, notify + stop the timer
+        // (keeping elapsed for logging) + pop the window up pinned so it stays.
+        // Runs before the "target met" early-out below so it fires regardless.
+        {
+            let now = Local::now();
+            let end = parse_hhmm(&s.end_of_day)
+                .unwrap_or_else(|| NaiveTime::from_hms_opt(18, 0, 0).unwrap());
+            if now.time() >= end {
+                let mut done = state.work_ended_on.lock().await;
+                if *done != Some(now.date_naive()) {
+                    *done = Some(now.date_naive());
+                    drop(done);
+                    notify(&app, "หมดเวลาทำงานแล้ว", "หยุดจับเวลาและลงเวลาที่เหลือได้เลย");
+                    // pin so the auto-hide-on-blur won't hide the panel
+                    {
+                        let mut ws = state.window_state.lock().unwrap();
+                        ws.pinned = true;
+                    }
+                    persist_window_state(&app);
+                    if let Some(win) = app.get_webview_window("main") {
+                        show_window(&app, &win);
+                    }
+                    // frontend stops the timer + prefills the log form
+                    let _ = app.emit("work-ended", ());
+                }
+            }
         }
 
         let target_secs = (s.work_hours_per_day * 3600.0) as u64;
@@ -303,7 +350,10 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::get_sprint_issues,
+            commands::get_task_form_meta,
+            commands::create_issue,
             commands::get_today_total,
+            commands::get_stack,
             commands::log_work,
             commands::get_branches,
             commands::get_auto_suggestions,
@@ -341,6 +391,7 @@ pub fn run() {
             let connections = oauth::load(&config_dir);
             let window_state = winstate::load(&config_dir);
             let hotkey = loaded.hotkey.clone();
+            let create_hotkey = loaded.create_hotkey.clone();
             let target_hours = loaded.work_hours_per_day;
             app.manage(AppState::new(config_dir, loaded, connections, window_state));
 
@@ -450,7 +501,7 @@ pub fn run() {
             tray_builder.build(app)?;
 
             // ----- hotkey -----
-            if let Err(e) = register_hotkey(app.handle(), &hotkey) {
+            if let Err(e) = register_hotkey(app.handle(), &hotkey, &create_hotkey) {
                 eprintln!("{e}");
             }
 
