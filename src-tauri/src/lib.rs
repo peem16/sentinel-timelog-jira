@@ -394,18 +394,18 @@ pub fn run() {
             let target_hours = loaded.work_hours_per_day;
             app.manage(AppState::new(config_dir, loaded, connections, window_state));
 
-            // ----- window glass effect -----
+            // ----- window setup -----
+            // No native vibrancy/acrylic on either OS — the glass tone is baked into
+            // the CSS gradient (styles.css .widget) so both platforms look the same.
+            //
+            // macOS note: we used to apply_vibrancy(HudWindow). That material puts the
+            // window into an NSPanel HUD style that reserves a titlebar strip, which
+            // shoved the webview content up ~12px and clipped the header / dropdowns /
+            // overlays at the top edge. Windows never had vibrancy (apply_acrylic
+            // paints an opaque rectangle that leaks through the transparent
+            // rounded-corner notches as a gray square), so dropping it on macOS too
+            // gives one consistent look and fixes the clipping.
             if let Some(win) = app.get_webview_window("main") {
-                #[cfg(target_os = "macos")]
-                {
-                    use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-                    let _ = apply_vibrancy(&win, NSVisualEffectMaterial::HudWindow, None, Some(14.0));
-                }
-                // Windows: no acrylic. apply_acrylic paints a rectangular surface
-                // over the whole window that shows through the transparent
-                // rounded-corner notches as a gray square. The glass tone is baked
-                // into the CSS gradient (styles.css .widget) instead.
-
                 // track drags + auto-hide on blur (unless pinned)
                 let win2 = win.clone();
                 let app_handle = app.handle().clone();
