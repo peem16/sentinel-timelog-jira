@@ -79,7 +79,7 @@ header {
   cursor: grab;
 }
 header:active { cursor: grabbing; }
-.head-left { display: flex; align-items: center; gap: 8px; }
+.head-left { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
 .logo {
   width: 21px; height: 21px; border-radius: 6px;
   background: var(--accent);
@@ -90,7 +90,10 @@ header:active { cursor: grabbing; }
   border: 2px solid transparent; border-right-color: #fff; border-bottom-color: #fff;
   transform: rotate(-45deg);
 }
-.title { font-weight: 700; font-size: 13.5px; letter-spacing: 0.01em; }
+.title {
+  font-weight: 700; font-size: 13.5px; letter-spacing: 0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .head-right { display: flex; align-items: center; gap: 4px; }
 
 .icon-btn {
@@ -217,7 +220,7 @@ select option { background: var(--bg-solid); color: var(--text); }
 #issue-search { padding-left: 32px; }
 .combo-list {
   position: absolute; top: calc(100% + 4px); left: 0; right: 0;
-  max-height: 200px; overflow-y: auto;
+  max-height: min(200px, 45vh); overflow-y: auto;
   background: var(--bg-solid);
   border: 1px solid var(--border2);
   border-radius: 10px;
@@ -445,3 +448,15 @@ code {
   white-space: pre-wrap; word-break: break-word;
   font-family: var(--mono); user-select: text;
 }
+
+/* ---------- resize grip ---------- */
+#resize-grip {
+  position: absolute; right: 3px; bottom: 3px;
+  width: 16px; height: 16px; z-index: 30; /* above overlays (10) */
+  cursor: se-resize;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  background: repeating-linear-gradient(135deg,
+    transparent 0 4px, rgba(255, 255, 255, 0.35) 4px 5.5px);
+  opacity: 0.45; transition: opacity 0.15s;
+}
+#resize-grip:hover { opacity: 0.95; }
