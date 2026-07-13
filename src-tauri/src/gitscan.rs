@@ -18,11 +18,13 @@ pub struct BranchInfo {
     pub active: bool,
 }
 
-/// Report the branch each candidate repo is currently on. Candidates come from
-/// two sources: folders an IDE (Cursor / VS Code / Windsurf) currently has open,
-/// and — as a fallback — git repos under the configured `workspace_roots`.
-/// The IDE's focused window sorts first, then any IDE window, then most recently
-/// touched. IDE folders need no configuration; that's why they lead.
+/// Report the branch of each folder an IDE (Cursor / VS Code / Windsurf) that is
+/// **currently running** has open — the IDE's focused window first, then its
+/// other windows. `workspace_roots` still seed candidates (so a root that the
+/// IDE has open gets a proper repo name), but a repo only surfaces when a live
+/// IDE actually has it open: no IDE running → no chips. storage.json keeps a
+/// `lastActiveWindow` even after the IDE closes, so the running-process check is
+/// what keeps stale, closed-editor branches from showing.
 pub fn scan(roots: &[String], project_key: &str) -> Vec<BranchInfo> {
     // normalized path -> (ide label, is this the focused window?)
     let ide_folders = ide_open_folders();
@@ -89,6 +91,8 @@ pub fn scan(roots: &[String], project_key: &str) -> Vec<BranchInfo> {
         })
         .collect();
 
+    // only surface repos a running IDE actually has open — drop root-only repos
+    out.retain(|b| b.ide.is_some());
     // focused IDE window first, then any IDE window, then most recently active
     out.sort_by(|a, b| {
         b.active
@@ -110,8 +114,12 @@ fn norm(p: &str) -> String {
 /// just the on-disk state file, which the IDE rewrites when windows open, close,
 /// or refocus. Returns (ide label, folder path, is_focused_window).
 fn ide_open_folders() -> Vec<(String, String, bool)> {
+    let running = running_ides();
     let mut out = vec![];
     for (label, storage) in ide_storage_files() {
+        if !running.contains(&label) {
+            continue; // IDE not open right now — its stored window state is stale
+        }
         let Ok(raw) = std::fs::read_to_string(&storage) else {
             continue;
         };
@@ -201,6 +209,75 @@ fn uri_to_path(uri: &str) -> Option<String> {
     {
         Some(decoded)
     }
+}
+
+/// Labels of the VS Code-family IDEs whose process is running right now.
+/// Matched against `ide_storage_files()` so a stored window only counts when its
+/// editor is actually open.
+fn running_ides() -> std::collections::HashSet<String> {
+    let names = process_names();
+    // exact (lowercased, ".exe"-stripped) process name -> UI label
+    let map = [
+        ("cursor", "Cursor"),
+        ("code", "VS Code"),
+        ("windsurf", "Windsurf"),
+        ("code - insiders", "VS Code Insiders"),
+        ("vscodium", "VSCodium"),
+        ("codium", "VSCodium"),
+    ];
+    let mut set = std::collections::HashSet::new();
+    for name in &names {
+        for (exe, label) in map {
+            if name == exe {
+                set.insert(label.to_string());
+            }
+        }
+    }
+    set
+}
+
+/// Running process image names, lowercased and without a trailing `.exe`.
+fn process_names() -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        // CSV, no header — first field of each row is "ImageName"
+        run_hidden("tasklist", &["/FO", "CSV", "/NH"])
+            .map(|out| {
+                out.lines()
+                    .filter_map(|l| l.split("\",\"").next())
+                    .map(|s| s.trim_matches('"').trim_end_matches(".exe").to_lowercase())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        run_hidden("ps", &["-Ao", "comm="])
+            .map(|out| {
+                out.lines()
+                    .filter_map(|l| {
+                        Path::new(l.trim())
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_lowercase())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Run a short command and capture stdout, without popping a console window on
+/// Windows (this app has no console of its own).
+fn run_hidden(cmd: &str, args: &[&str]) -> Option<String> {
+    let mut c = std::process::Command::new(cmd);
+    c.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = c.output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Extract a Jira-style issue key from arbitrary text (a branch name, a PR
