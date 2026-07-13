@@ -193,6 +193,19 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 3px rgba(106, 164, 255, 0.12);
 }
 textarea { resize: none; }
+
+/* Native <select> on macOS (WKWebView) ignores the dark styling above and draws
+   the aqua control with a blue ⇅ button. Windows (WebView2) honours the CSS, so
+   force the native appearance off everywhere and paint our own caret to match. */
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 30px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239aa7c7' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
 select option { background: var(--bg-solid); color: var(--text); }
 
 /* ---------- searchable task picker ---------- */

@@ -4214,7 +4214,6 @@ dependencies = [
  "tauri-plugin-positioner",
  "tokio",
  "urlencoding",
- "window-vibrancy",
 ]
 
 [[package]]
