@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -10,11 +11,30 @@ pub struct BranchInfo {
     pub issue_key: Option<String>,
     /// seconds since last git activity (HEAD/index mtime)
     pub idle_secs: u64,
+    /// IDE that currently has this folder open ("Cursor" / "VS Code" / …),
+    /// or None if the repo was found only by scanning workspace_roots.
+    pub ide: Option<String>,
+    /// true when this is the IDE's currently-focused (last-active) window.
+    pub active: bool,
 }
 
-/// Scan workspace roots for git repos (root itself, or 1 level deep) and
-/// report the branch each repo is currently on, most recently active first.
+/// Report the branch each candidate repo is currently on. Candidates come from
+/// two sources: folders an IDE (Cursor / VS Code / Windsurf) currently has open,
+/// and — as a fallback — git repos under the configured `workspace_roots`.
+/// The IDE's focused window sorts first, then any IDE window, then most recently
+/// touched. IDE folders need no configuration; that's why they lead.
 pub fn scan(roots: &[String], project_key: &str) -> Vec<BranchInfo> {
+    // normalized path -> (ide label, is this the focused window?)
+    let ide_folders = ide_open_folders();
+    let mut ide_map: HashMap<String, (String, bool)> = HashMap::new();
+    for (ide, path, active) in &ide_folders {
+        ide_map
+            .entry(norm(path))
+            .and_modify(|e| e.1 |= *active)
+            .or_insert_with(|| (ide.clone(), *active));
+    }
+
+    // candidate repos: workspace roots (root itself, or 1 level deep) …
     let mut repos: Vec<PathBuf> = vec![];
     for root in roots {
         let root = PathBuf::from(root);
@@ -31,9 +51,18 @@ pub fn scan(roots: &[String], project_key: &str) -> Vec<BranchInfo> {
             }
         }
     }
+    // … plus every folder an IDE has open that is itself a git repo
+    for (_, path, _) in &ide_folders {
+        let p = PathBuf::from(path);
+        if p.join(".git").exists() {
+            repos.push(p);
+        }
+    }
 
+    let mut seen = std::collections::HashSet::new();
     let mut out: Vec<BranchInfo> = repos
         .into_iter()
+        .filter(|repo| seen.insert(norm(&repo.to_string_lossy())))
         .filter_map(|repo| {
             let branch = read_branch(&repo)?;
             let issue_key = extract_issue_key(&branch, project_key);
@@ -41,6 +70,10 @@ pub fn scan(roots: &[String], project_key: &str) -> Vec<BranchInfo> {
                 .and_then(|t| SystemTime::now().duration_since(t).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(u64::MAX);
+            let (ide, active) = match ide_map.get(&norm(&repo.to_string_lossy())) {
+                Some((label, active)) => (Some(label.clone()), *active),
+                None => (None, false),
+            };
             Some(BranchInfo {
                 repo: repo
                     .file_name()
@@ -50,12 +83,124 @@ pub fn scan(roots: &[String], project_key: &str) -> Vec<BranchInfo> {
                 branch,
                 issue_key,
                 idle_secs,
+                ide,
+                active,
             })
         })
         .collect();
 
-    out.sort_by_key(|b| b.idle_secs);
+    // focused IDE window first, then any IDE window, then most recently active
+    out.sort_by(|a, b| {
+        b.active
+            .cmp(&a.active)
+            .then(b.ide.is_some().cmp(&a.ide.is_some()))
+            .then(a.idle_secs.cmp(&b.idle_secs))
+    });
     out
+}
+
+/// Case-insensitive, slash-normalized path key so folders reported by an IDE
+/// (`d:/Work/foo`) match repos scanned from `workspace_roots` (`D:\Work\foo`).
+fn norm(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// Folders currently open in Cursor / VS Code / Windsurf, read from each IDE's
+/// `globalStorage/storage.json` (`windowsState`). No IDE process is touched —
+/// just the on-disk state file, which the IDE rewrites when windows open, close,
+/// or refocus. Returns (ide label, folder path, is_focused_window).
+fn ide_open_folders() -> Vec<(String, String, bool)> {
+    let mut out = vec![];
+    for (label, storage) in ide_storage_files() {
+        let Ok(raw) = std::fs::read_to_string(&storage) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let ws = &json["windowsState"];
+        if let Some(p) = window_folder(&ws["lastActiveWindow"]) {
+            out.push((label.clone(), p, true));
+        }
+        if let Some(arr) = ws["openedWindows"].as_array() {
+            for w in arr {
+                if let Some(p) = window_folder(w) {
+                    out.push((label.clone(), p, false));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The folder a window has open — a single-folder window (`folder`) or the
+/// directory containing a multi-root workspace file (`workspace.configPath`).
+fn window_folder(w: &serde_json::Value) -> Option<String> {
+    if let Some(uri) = w["folder"].as_str() {
+        return uri_to_path(uri);
+    }
+    if let Some(uri) = w["workspace"]["configPath"].as_str() {
+        let p = uri_to_path(uri)?;
+        return Path::new(&p).parent().map(|d| d.to_string_lossy().to_string());
+    }
+    None
+}
+
+/// (label, storage.json path) for each VS Code-family IDE we know about.
+fn ide_storage_files() -> Vec<(String, PathBuf)> {
+    let Some(base) = ide_config_base() else {
+        return vec![];
+    };
+    [
+        ("Cursor", "Cursor"),
+        ("Code", "VS Code"),
+        ("Windsurf", "Windsurf"),
+        ("Code - Insiders", "VS Code Insiders"),
+        ("VSCodium", "VSCodium"),
+    ]
+    .iter()
+    .map(|(dir, label)| {
+        let p = base
+            .join(dir)
+            .join("User")
+            .join("globalStorage")
+            .join("storage.json");
+        (label.to_string(), p)
+    })
+    .collect()
+}
+
+/// Roaming config base where VS Code-family IDEs keep their per-user state.
+fn ide_config_base() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
+    }
+}
+
+/// Decode a `file://` URI from storage.json into a filesystem path.
+/// e.g. `file:///d%3A/Work/foo` -> `d:/Work/foo` on Windows.
+fn uri_to_path(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    let decoded = urlencoding::decode(rest).ok()?.into_owned();
+    #[cfg(target_os = "windows")]
+    {
+        // drop the leading slash before the drive letter: "/d:/…" -> "d:/…"
+        Some(decoded.strip_prefix('/').unwrap_or(&decoded).to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Some(decoded)
+    }
 }
 
 /// Extract a Jira-style issue key from arbitrary text (a branch name, a PR

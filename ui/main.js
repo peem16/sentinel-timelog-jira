@@ -317,12 +317,22 @@ async function loadBranches() {
   box.innerHTML = "";
   try {
     const branches = await invoke("get_branches");
-    for (const b of branches.slice(0, 5)) {
+    let prefilled = false;
+    for (const b of branches.slice(0, 6)) {
       if (!b.issue_key) continue;
+      const iss = issueByKey(b.issue_key);
       const chip = document.createElement("button");
-      chip.className = "chip";
-      chip.innerHTML = `<b>${esc(b.issue_key)}</b> <span class="dim">· ${esc(b.repo)} (${esc(b.branch)})</span>`;
-      chip.title = `${b.path}\nbranch: ${b.branch}`;
+      chip.className = "chip" + (b.active ? " chip-active" : "");
+      // IDE badge (🖥 on the focused window); tail shows the sprint summary when
+      // the branch maps to a current task, else the repo/branch it came from
+      const badge = b.ide
+        ? `<span class="chip-ide">${b.active ? "🖥 " : ""}${esc(b.ide)}</span> `
+        : "";
+      const tail = iss ? esc(iss.summary) : `${esc(b.repo)} (${esc(b.branch)})`;
+      chip.innerHTML = `${badge}<b>${esc(b.issue_key)}</b> <span class="dim">· ${tail}</span>`;
+      chip.title =
+        `${b.path}\nbranch: ${b.branch}` +
+        (iss ? `\n${iss.summary}` : "\n(ไม่อยู่ใน sprint ปัจจุบัน)");
       chip.onclick = () => {
         setIssue(b.issue_key);
         if (!issueByKey(b.issue_key)) {
@@ -330,8 +340,14 @@ async function loadBranches() {
         }
       };
       box.appendChild(chip);
+      // one-shot: preselect the task the IDE is focused on, but only when the
+      // user hasn't picked anything yet — never override a manual choice
+      if (b.active && !prefilled && !currentIssueKey && !$("issue-search").value.trim()) {
+        setIssue(b.issue_key);
+        prefilled = true;
+      }
     }
-  } catch { /* no roots configured */ }
+  } catch { /* no IDE state / no roots configured */ }
 }
 
 /* ================= timer ================= */

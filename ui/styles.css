@@ -233,6 +233,10 @@ select option { background: var(--bg-solid); color: var(--text); }
 .chip:hover { border-color: var(--accent); background: var(--accent-soft); }
 .chip b { color: var(--accent); font-weight: 700; font-family: var(--mono); }
 .chip .dim { color: var(--faint); }
+/* the folder the IDE currently has focused — highlighted so it reads as "now" */
+.chip-active { border-color: var(--accent); background: var(--accent-soft); }
+.chip-ide { font-size: 10px; color: var(--faint); font-weight: 600; }
+.chip-active .chip-ide { color: var(--accent); }
 
 /* ---------- issue status line ---------- */
 .issue-status { font-size: 11px; line-height: 1.5; color: var(--muted); white-space: pre-wrap; }
