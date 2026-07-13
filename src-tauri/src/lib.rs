@@ -68,6 +68,10 @@ pub fn toggle_window(app: &AppHandle) {
 fn show_window(app: &AppHandle, win: &WebviewWindow) {
     // restore the last dragged position; otherwise dock next to the tray
     let saved = app.state::<AppState>().window_state.lock().unwrap().clone();
+    // size first: the TrayCenter fallback below positions based on current size
+    if saved.has_size && saved.width > 0 && saved.height > 0 {
+        let _ = win.set_size(tauri::PhysicalSize::new(saved.width, saved.height));
+    }
     if saved.has_pos {
         let _ = win.set_position(tauri::PhysicalPosition::new(saved.x, saved.y));
     } else if win.move_window(Position::TrayCenter).is_err() {
@@ -81,14 +85,21 @@ fn show_window(app: &AppHandle, win: &WebviewWindow) {
     let _ = win.emit("panel-shown", ());
 }
 
-/// Capture the window's current position into app state.
+/// Capture the window's current position + size into app state.
 fn capture_position(app: &AppHandle, win: &WebviewWindow) {
+    let state = app.state::<AppState>();
+    let mut ws = state.window_state.lock().unwrap();
     if let Ok(pos) = win.outer_position() {
-        let state = app.state::<AppState>();
-        let mut ws = state.window_state.lock().unwrap();
         ws.x = pos.x;
         ws.y = pos.y;
         ws.has_pos = true;
+    }
+    if let Ok(size) = win.inner_size() {
+        if size.width > 0 && size.height > 0 {
+            ws.width = size.width;
+            ws.height = size.height;
+            ws.has_size = true;
+        }
     }
 }
 
@@ -417,6 +428,17 @@ pub fn run() {
                         ws.x = pos.x;
                         ws.y = pos.y;
                         ws.has_pos = true;
+                    }
+                    // remember the size live while the user resizes
+                    // (0×0 fires on minimize — don't persist that)
+                    tauri::WindowEvent::Resized(size) => {
+                        if size.width > 0 && size.height > 0 {
+                            let state = app_handle.state::<AppState>();
+                            let mut ws = state.window_state.lock().unwrap();
+                            ws.width = size.width;
+                            ws.height = size.height;
+                            ws.has_size = true;
+                        }
                     }
                     // drag finished (or user clicked back in) — clear the drag guard
                     tauri::WindowEvent::Focused(true) => {

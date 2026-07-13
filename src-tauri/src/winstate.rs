@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Persisted position + pin state of the widget window.
+/// Persisted position + size + pin state of the widget window.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowState {
@@ -12,6 +12,11 @@ pub struct WindowState {
     pub has_pos: bool,
     /// pinned = stays on screen (does not auto-hide when it loses focus)
     pub pinned: bool,
+    /// physical inner size (== outer size, the window is undecorated)
+    pub width: u32,
+    pub height: u32,
+    /// true once the user has resized at least once
+    pub has_size: bool,
 }
 
 fn path(dir: &Path) -> PathBuf {

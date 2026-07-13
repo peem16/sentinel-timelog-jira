@@ -1143,6 +1143,35 @@ document.addEventListener("mousedown", (e) => {
 });
 window.addEventListener("mouseup", () => invoke("end_drag"));
 
+/* resize grip: guard against blur auto-hide (same as move-drag), then let the
+   OS run the resize loop. macOS may not support startResizeDragging — fall
+   back to a manual pointer-driven setSize loop. */
+document.getElementById("resize-grip").addEventListener("mousedown", async (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  invoke("begin_drag"); // cleared by mouseup / Focused(true), same as move-drag
+  const w = window.__TAURI__.window.getCurrentWindow();
+  try {
+    await w.startResizeDragging("SouthEast");
+  } catch {
+    const start = await w.innerSize(); // PhysicalSize
+    const sx = e.screenX, sy = e.screenY, dpr = await w.scaleFactor();
+    const move = (ev) => {
+      w.setSize(new window.__TAURI__.dpi.PhysicalSize(
+        Math.max(1, start.width + Math.round((ev.screenX - sx) * dpr)),
+        Math.max(1, start.height + Math.round((ev.screenY - sy) * dpr))
+      )).catch(() => {});
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      invoke("end_drag");
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+});
+
 /* refresh data every time the panel opens */
 listen("panel-shown", () => {
   refreshToday(false);
