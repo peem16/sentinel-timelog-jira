@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 
+use crate::ai::{self, AiDraft};
 use crate::calendar::{self, CalEvent};
 use crate::github::{self, ReviewedPR};
 use crate::gitscan::{self, BranchInfo};
@@ -39,6 +40,7 @@ pub async fn cached_account_id(app: &AppHandle, client: &JiraClient) -> Result<S
 /// Drop cached Jira metadata — call whenever the Jira identity may change.
 async fn invalidate_jira_caches(state: &AppState) {
     *state.issues_fetched_at.write().await = None;
+    *state.issues_all_fetched_at.write().await = None;
     *state.sprint_field_id.write().await = None;
     *state.account_id.write().await = None;
 }
@@ -117,12 +119,27 @@ pub async fn get_sprint_issues(
 #[tauri::command]
 pub async fn get_sprint_issues_all(app: AppHandle) -> Result<SprintIssues, String> {
     let state = app.state::<AppState>();
+    // same TTL cache as the non-Done variant — the auto page can call this twice
+    // in one refresh (directly + via get_reviewed_prs), so serving from cache
+    // saves a full Jira roundtrip. sprint_name is shared with the non-all cache.
+    let fetched = *state.issues_all_fetched_at.read().await;
+    if let Some(t) = fetched {
+        if t.elapsed().as_secs() < ISSUE_CACHE_SECS {
+            return Ok(SprintIssues {
+                sprint_name: state.sprint_name.read().await.clone(),
+                issues: state.issues_all.read().await.clone(),
+            });
+        }
+    }
     let s = state.settings.read().await.clone();
     let client = oauth::jira_client(&app).await?;
     let sprint_field = cached_sprint_field(&app, &client).await?;
     let (sprint_name, issues) = client
         .sprint_issues(&s.jira_project_key, &sprint_field, true)
         .await?;
+    *state.issues_all.write().await = issues.clone();
+    *state.sprint_name.write().await = sprint_name.clone();
+    *state.issues_all_fetched_at.write().await = Some(Instant::now());
     Ok(SprintIssues { sprint_name, issues })
 }
 
@@ -183,9 +200,31 @@ pub async fn create_issue(
             &sprint_field,
         )
         .await?;
-    // force the sprint-issue list to refetch next time so the new task appears
+    // force the sprint-issue lists to refetch next time so the new task appears
     *state.issues_fetched_at.write().await = None;
+    *state.issues_all_fetched_at.write().await = None;
     Ok(key)
+}
+
+/// Rewrite a rough summary/description into a structured Thai issue via the
+/// configured AI CLI. Review-first: the draft goes back to the form and the
+/// user still presses "บันทึกลง Jira" themselves.
+#[tauri::command]
+pub async fn ai_draft_issue(
+    state: State<'_, AppState>,
+    issue_type_name: String,
+    summary: String,
+    description: String,
+) -> Result<AiDraft, String> {
+    if summary.trim().is_empty() {
+        return Err("กรอกหัวข้อคร่าวๆ ก่อน".into());
+    }
+    let s = state.settings.read().await.clone();
+    let prompt = ai::build_prompt(&issue_type_name, summary.trim(), description.trim(), &s.ai_skill);
+    // 5 min: the skill reads code across repos (--allowedTools), which is
+    // slower than the old skeleton-only rewrite but gives complete drafts.
+    let raw = ai::run_cli(&s.ai_command, &prompt, std::time::Duration::from_secs(300)).await?;
+    ai::parse_draft(&raw)
 }
 
 #[tauri::command]

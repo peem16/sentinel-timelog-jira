@@ -590,30 +590,33 @@ async function fetchAuto() {
   if (autoFetching) return;
   autoFetching = true;
   $("auto-list").innerHTML = '<div class="hint">กำลังโหลด…</div>';
-  // build into a local list and assign once at the end, so a partially-filled
-  // autoSuggestions is never visible mid-fetch
-  const list = [];
   let err = "";
+  const addErr = (msg) => {
+    err = err ? `${err} | ${msg}` : msg;
+  };
   try {
+    // These four calls are independent — fire them together so the panel waits
+    // on the slowest (usually GitHub) instead of the sum of all four. Each source
+    // resolves to its own array so the merged list keeps a stable order
+    // (calendar first, then PRs) regardless of which call finishes first.
     // Done-inclusive task list for mapping PRs (esp. PRs on already-Done tickets)
-    try {
-      autoIssues = (await invoke("get_sprint_issues_all")).issues || [];
-    } catch {
-      autoIssues = [];
-    }
+    const issuesP = invoke("get_sprint_issues_all").then(
+      (r) => (autoIssues = r.issues || []),
+      () => (autoIssues = []),
+    );
     // Google Calendar events
-    try {
-      const cal = await invoke("get_auto_suggestions");
-      cal.forEach((c) => list.push({ ...c, source: "calendar" }));
-    } catch (e) {
-      err = String(e);
-    }
+    const calP = invoke("get_auto_suggestions").then(
+      (cal) => cal.map((c) => ({ ...c, source: "calendar" })),
+      (e) => {
+        addErr(String(e));
+        return [];
+      },
+    );
     // GitHub PRs reviewed today — normalize into the same auto-suggestion shape
     // so renderAutoList()/confirmAuto() handle them without special-casing
-    try {
-      const prs = await invoke("get_reviewed_prs");
-      prs.forEach((pr) =>
-        list.push({
+    const prsP = invoke("get_reviewed_prs").then(
+      (prs) =>
+        prs.map((pr) => ({
           source: "github",
           url: pr.url,
           reviewed_at: pr.reviewed_at,
@@ -626,15 +629,21 @@ async function fetchAuto() {
             end: null,
             duration_secs: 300, // PR review default = 5 นาที
           },
-        })
-      );
-    } catch (e) {
-      const msg = String(e);
-      // "not connected" is expected when GitHub is unused — don't nag about it
-      if (!msg.includes("ยังไม่ได้เชื่อมต่อ GitHub")) {
-        err = err ? `${err} | ${msg}` : msg;
-      }
-    }
+        })),
+      (e) => {
+        const msg = String(e);
+        // "not connected" is expected when GitHub is unused — don't nag about it
+        if (!msg.includes("ยังไม่ได้เชื่อมต่อ GitHub")) addErr(msg);
+        return [];
+      },
+    );
+    // which of these were already logged today? (survives re-fetch/restart)
+    const loggedP = invoke("get_logged_keys").then(
+      (keys) => (loggedKeys = new Set(keys)),
+      () => (loggedKeys = new Set()),
+    );
+    const [, cal, prs] = await Promise.all([issuesP, calP, prsP, loggedP]);
+    const list = [...cal, ...prs];
     // safety net: drop any items sharing a dedupe key (same PR / same event)
     const seen = new Set();
     autoSuggestions = list.filter((s) => {
@@ -643,12 +652,6 @@ async function fetchAuto() {
       seen.add(k);
       return true;
     });
-    // which of these were already logged today? (survives re-fetch/restart)
-    try {
-      loggedKeys = new Set(await invoke("get_logged_keys"));
-    } catch {
-      loggedKeys = new Set();
-    }
     renderAutoList();
     if (err) setMsg("auto-msg", err, false);
   } finally {
@@ -755,6 +758,8 @@ function fillSettingsForm(s) {
   $("s-create-hotkey").value = s.create_hotkey || "";
   $("s-roots").value = (s.workspace_roots || []).join("\n");
   $("s-ics").value = s.ics_url;
+  $("s-ai-command").value = s.ai_command || "";
+  $("s-ai-skill").value = s.ai_skill != null ? s.ai_skill : "mdt-task-writer";
   renderRules(s.auto_rules || []);
   const eodEl = $("today-eod");
   if (eodEl) {
@@ -770,6 +775,7 @@ async function loadSettings() {
   lunchStartMin = hhmmToMin(settings.lunch_start) ?? 12 * 60;
   lunchEndMin = hhmmToMin(settings.lunch_end) ?? 13 * 60;
   fillSettingsForm(settings);
+  renderAiToggle();
 }
 
 async function saveSettings() {
@@ -800,6 +806,13 @@ async function saveSettings() {
     github_org: $("s-github-org").value.trim(),
     github_client_id: $("s-gh-id").value.trim(),
     github_client_secret: $("s-gh-secret").value.trim(),
+    // the toggle lives in the Create Task form — carry it, or saving settings
+    // would silently switch it off (this object replaces settings wholesale)
+    ai_enabled: !!(settings && settings.ai_enabled),
+    ai_command: $("s-ai-command").value.trim() || 'claude -p --strict-mcp-config --allowedTools "Read Grep Glob Bash(git:*)" --output-format json',
+    // blank stays blank (= draft without a skill); don't coerce back to default
+    // or the user could never turn the forced skill off
+    ai_skill: $("s-ai-skill").value.trim(),
   };
   try {
     await invoke("save_settings", { newSettings: ns });
@@ -930,7 +943,10 @@ function openOverlay(name) {
   if (!el) return;
   el.hidden = false;
   if (name === "auto" && !autoSuggestions.length) fetchAuto();
-  if (name === "createtask") loadTaskFormMeta();
+  if (name === "createtask") {
+    loadTaskFormMeta();
+    renderAiToggle();
+  }
 }
 function closeOverlays() {
   if (typeof stopMic === "function") stopMic();
@@ -1043,6 +1059,66 @@ if (!SpeechRec) {
     if (altPtt) { altPtt = false; stopMic(); }
   });
 }
+
+/* AI-assisted writing (review-first): rough text in → structured draft back
+   into the form, the user still presses "บันทึกลง Jira" themselves */
+let aiBusy = false;
+
+function renderAiToggle() {
+  const on = !!(settings && settings.ai_enabled);
+  const btn = $("btn-ai");
+  btn.classList.toggle("active", on);
+  btn.title = on
+    ? "AI ช่วยเรียบเรียง: เปิด — คลิกเพื่อปิด"
+    : "AI ช่วยเรียบเรียง: ปิด — คลิกเพื่อเปิด";
+  $("btn-ai-generate").hidden = !on;
+}
+
+$("btn-ai").onclick = async () => {
+  if (!settings) return; // settings not loaded yet
+  settings.ai_enabled = !settings.ai_enabled;
+  renderAiToggle();
+  try {
+    await invoke("save_settings", { newSettings: settings }); // persist across sessions
+  } catch (e) {
+    setMsg("create-msg", String(e), false);
+  }
+};
+
+async function runAiDraft() {
+  if (aiBusy) return;
+  const summary = $("create-summary").value.trim();
+  if (!summary) return setMsg("create-msg", "กรอกหัวข้อคร่าวๆ ก่อน แล้วให้ AI ช่วยเรียบเรียง", false);
+  const typeOpt = $("create-type").selectedOptions[0];
+  const gen = $("btn-ai-generate");
+  const submit = $("btn-create-submit");
+  aiBusy = true;
+  gen.disabled = submit.disabled = true;
+  // progress lives on the button label — setMsg auto-clears after 6s
+  const oldLabel = gen.textContent;
+  gen.textContent = "กำลังวิเคราะห์โค้ด+เรียบเรียง… (อาจนาน 1–3 นาที)";
+  stopMic();
+  try {
+    const d = await invoke("ai_draft_issue", {
+      issueTypeName: typeOpt ? typeOpt.dataset.name || typeOpt.textContent : "Task",
+      summary,
+      description: $("create-desc").value,
+    });
+    // the user may have closed the overlay while waiting — don't write stale fields
+    if (!$("overlay-createtask").hidden) {
+      $("create-summary").value = d.summary || summary;
+      if (d.description) $("create-desc").value = d.description;
+      setMsg("create-msg", "AI เรียบเรียงแล้ว — ตรวจ/แก้ได้ก่อนกดบันทึก ✓", true);
+    }
+  } catch (e) {
+    if (!$("overlay-createtask").hidden) setMsg("create-msg", String(e), false);
+  } finally {
+    aiBusy = false;
+    gen.textContent = oldLabel;
+    gen.disabled = submit.disabled = false;
+  }
+}
+$("btn-ai-generate").onclick = runAiDraft;
 
 /* collapsible "เพิ่มรายละเอียด" (comment) */
 $("btn-details").onclick = () => {

@@ -399,7 +399,12 @@ details .field { margin-top: 8px; }
 }
 .field-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
 .field-head > span { color: var(--muted); font-size: 11px; }
+.field-head-btns { display: flex; gap: 4px; }
 .mic-btn { width: 22px; height: 22px; }
+.ai-btn { width: 22px; height: 22px; }
+.btn-row { display: flex; gap: 8px; }
+.btn-row > .btn.primary { flex: 1; }
+.btn-row > .btn.ghost { flex: 0 0 auto; }
 .mic-btn.recording {
   color: var(--bad);
   border-color: rgba(255, 122, 138, 0.4);

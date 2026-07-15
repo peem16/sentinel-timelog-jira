@@ -1,3 +1,4 @@
+mod ai;
 mod calendar;
 mod commands;
 mod github;
@@ -363,6 +364,7 @@ pub fn run() {
             commands::get_sprint_issues_all,
             commands::get_task_form_meta,
             commands::create_issue,
+            commands::ai_draft_issue,
             commands::get_today_total,
             commands::get_stack,
             commands::log_work,

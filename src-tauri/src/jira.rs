@@ -419,16 +419,110 @@ impl JiraClient {
     }
 }
 
-/// Wrap plain text in a minimal Atlassian Document Format doc (single paragraph).
+/// Plain text → Atlassian Document Format. Blank lines split paragraphs,
+/// consecutive "- "/"* " lines become a bulletList, "1. "/"1) " lines an
+/// orderedList, and single newlines inside a paragraph become hardBreak.
+/// Never emits an empty text node (Jira rejects those with a 400).
 fn adf(text: &str) -> Value {
-    json!({
-        "type": "doc",
-        "version": 1,
-        "content": [{
-            "type": "paragraph",
-            "content": [{ "type": "text", "text": text.trim() }]
-        }]
-    })
+    enum Block {
+        Para(Vec<String>),
+        Bullets(Vec<String>),
+        Numbers(Vec<String>),
+    }
+
+    let norm = text.replace("\r\n", "\n");
+    let mut blocks: Vec<Block> = Vec::new();
+    for line in norm.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            // separator sentinel — closes the current block, dropped at render
+            blocks.push(Block::Para(vec![]));
+            continue;
+        }
+        let bullet = t
+            .strip_prefix("- ")
+            .or_else(|| t.strip_prefix("* "))
+            .map(str::trim)
+            .filter(|r| !r.is_empty());
+        if let Some(rest) = bullet {
+            match blocks.last_mut() {
+                Some(Block::Bullets(v)) => v.push(rest.into()),
+                _ => blocks.push(Block::Bullets(vec![rest.into()])),
+            }
+        } else if let Some(rest) = strip_ordered(t) {
+            match blocks.last_mut() {
+                Some(Block::Numbers(v)) => v.push(rest),
+                _ => blocks.push(Block::Numbers(vec![rest])),
+            }
+        } else {
+            match blocks.last_mut() {
+                Some(Block::Para(v)) if !v.is_empty() => v.push(t.into()),
+                _ => blocks.push(Block::Para(vec![t.into()])),
+            }
+        }
+    }
+
+    let mut content: Vec<Value> = Vec::new();
+    for b in blocks {
+        match b {
+            Block::Para(lines) if lines.is_empty() => {} // drop sentinels
+            Block::Para(lines) => {
+                let mut inner = Vec::new();
+                for (i, l) in lines.iter().enumerate() {
+                    if i > 0 {
+                        inner.push(json!({ "type": "hardBreak" }));
+                    }
+                    inner.push(json!({ "type": "text", "text": l }));
+                }
+                content.push(json!({ "type": "paragraph", "content": inner }));
+            }
+            Block::Bullets(items) => content.push(list_node("bulletList", &items)),
+            Block::Numbers(items) => content.push(list_node("orderedList", &items)),
+        }
+    }
+    if content.is_empty() {
+        // whitespace-only input → valid empty paragraph, never an empty text node
+        let trimmed = norm.trim();
+        let inner: Vec<Value> = if trimmed.is_empty() {
+            vec![]
+        } else {
+            vec![json!({ "type": "text", "text": trimmed })]
+        };
+        content.push(json!({ "type": "paragraph", "content": inner }));
+    }
+    json!({ "type": "doc", "version": 1, "content": content })
+}
+
+/// "3. text" / "3) text" → Some("text"); anything else → None.
+fn strip_ordered(t: &str) -> Option<String> {
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let rest = &t[digits..]; // digits are ASCII — byte index is char-safe
+    let rest = rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))?;
+    let rest = rest.trim();
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_string())
+    }
+}
+
+fn list_node(kind: &str, items: &[String]) -> Value {
+    let content: Vec<Value> = items
+        .iter()
+        .map(|it| {
+            json!({
+                "type": "listItem",
+                "content": [{
+                    "type": "paragraph",
+                    "content": [{ "type": "text", "text": it }]
+                }]
+            })
+        })
+        .collect();
+    json!({ "type": kind, "content": content })
 }
 
 /// Convert a Jira "started" timestamp to its local-date string (YYYY-MM-DD).
@@ -469,4 +563,65 @@ fn short_err(body: &Value) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adf;
+
+    fn types(doc: &serde_json::Value) -> Vec<String> {
+        doc["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["type"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn single_line_stays_one_paragraph() {
+        let doc = adf("แก้บั๊กหน้า login");
+        assert_eq!(types(&doc), ["paragraph"]);
+        assert_eq!(
+            doc["content"][0]["content"][0]["text"],
+            "แก้บั๊กหน้า login"
+        );
+    }
+
+    #[test]
+    fn blank_lines_split_paragraphs_and_bullets() {
+        let doc = adf("วัตถุประสงค์:\n- ข้อแรก\n- ข้อสอง\n\nหมายเหตุ");
+        assert_eq!(types(&doc), ["paragraph", "bulletList", "paragraph"]);
+        let items = doc["content"][1]["content"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn ordered_list_and_crlf() {
+        let doc = adf("ขั้นตอน:\r\n1. เปิดแอพ\r\n2) กดปุ่ม");
+        assert_eq!(types(&doc), ["paragraph", "orderedList"]);
+        assert_eq!(
+            doc["content"][1]["content"].as_array().unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn single_newline_becomes_hardbreak() {
+        let doc = adf("บรรทัดแรก\nบรรทัดสอง");
+        assert_eq!(types(&doc), ["paragraph"]);
+        let inner = doc["content"][0]["content"].as_array().unwrap();
+        assert_eq!(inner[1]["type"], "hardBreak");
+        assert_eq!(inner.len(), 3);
+    }
+
+    #[test]
+    fn never_emits_empty_text_node() {
+        // lone "- " and blank-only input must not produce empty text nodes
+        for input in ["- ", "\n\n", "  "] {
+            let doc = adf(input);
+            let json = doc.to_string();
+            assert!(!json.contains(r#""text":"""#), "input {input:?} → {json}");
+        }
+    }
 }

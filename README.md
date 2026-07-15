@@ -11,6 +11,9 @@
 - **ลงเวลาเร็ว** — คลิก tray หรือกด hotkey (default `Ctrl+Alt+L`) → เลือก task จาก sprint ปัจจุบัน (ช่องเลือกพิมพ์ค้นหาจาก key/ชื่อ task ได้ เลื่อนด้วยลูกศร + Enter) ใส่เวลา (`1:30`, `1.5`, `45m`, `1h30m`) + รายละเอียด
   - รายการ task มาจาก active sprint (หา sprint จากค่า Sprint field ของ issue ล่าสุด — ไม่ใช้ JQL `openSprints()` ที่เพี้ยนบน site ที่มี Sprint custom field ซ้ำ) เฉพาะงานที่ยังไม่ Done รวม subtask เรียงตามลำดับบนบอร์ด (Rank)
 - **Branch suggestion** — สแกนโฟลเดอร์โปรเจกต์ที่ตั้งค่าไว้ อ่าน branch ปัจจุบันของแต่ละ repo (ที่เปิดใน Cursor/VS Code) ถ้าชื่อ branch มี `MDT-1234` จะขึ้นเป็น chip กดเลือก task ได้เลย เรียงตาม repo ที่ active ล่าสุด
+- **AI ช่วยเขียน Task/Bug** — ปุ่ม ✨ ในหน้าสร้าง Task (ข้างปุ่มไมค์) เปิดแล้วพิมพ์หัวข้อ+รายละเอียดคร่าวๆ → กด "✨ ให้ AI เรียบเรียง" → AI เขียนหัวข้อ+รายละเอียดตามโครงของทีม (Task: วัตถุประสงค์/ขอบเขต/Acceptance Criteria, Bug: Steps/Expected/Actual) กลับลงฟอร์มให้ตรวจ/แก้ก่อนกดบันทึกเอง
+  - default เรียก Claude Code ในเครื่อง (`claude -p --strict-mcp-config --output-format json` — ใช้ subscription ที่ login ไว้ ไม่ต้องมี API key) เปลี่ยนคำสั่งเป็น CLI อื่นได้ในตั้งค่า (เงื่อนไข: รับ prompt ทาง stdin แล้วพิมพ์คำตอบออก stdout) ถ้าหาคำสั่งไม่เจอให้ใส่ path เต็ม, timeout 2 นาที — **อย่าใส่ flag `--bare`** เพราะมันข้าม credentials ทำให้กลายเป็น "Not logged in"
+  - โครงรายละเอียด (pattern) ของ Task/Bug แก้ได้ในตั้งค่า ไม่ต้อง rebuild
 - **Timer** — ปุ่ม start/stop จับเวลา task แล้ว prefill ลงฟอร์ม
 - **แจ้งเตือน** — เตือนทุก N นาทีถ้ายังลงเวลาไม่ครบ + เตือนก่อนหมดวัน
 - **Auto จาก Google Calendar** — ดึงนัดวันนี้ (Calendar API ถ้า login Google แล้ว, ไม่งั้นใช้ secret ICS URL — รองรับ RRULE รายวัน/รายสัปดาห์/รายเดือน/รายปี + EXDATE), map ชื่อนัด → task ใน sprint ตามกติกาที่ตั้งไว้ (เช่น `Mandrake Grooming` → task ที่ชื่อขึ้นต้น `Grooming`) แสดง suggestion ทั้งวันให้แก้/ติ๊กเลือก แล้วกดยืนยันเพื่อลงเวลาจริงทีเดียว

@@ -25,6 +25,10 @@ pub struct AppState {
     pub issues: RwLock<Vec<IssueLite>>,
     pub sprint_name: RwLock<Option<String>>,
     pub issues_fetched_at: RwLock<Option<Instant>>,
+    /// Done-inclusive variant (auto page maps PRs onto already-Done tickets).
+    /// Cached separately from `issues` because it carries the extra Done rows.
+    pub issues_all: RwLock<Vec<IssueLite>>,
+    pub issues_all_fetched_at: RwLock<Option<Instant>>,
     /// Jira metadata that rarely changes — cleared when the Jira identity
     /// might change (login/logout/settings save) so it re-resolves lazily
     pub sprint_field_id: RwLock<Option<String>>,
@@ -52,6 +56,8 @@ impl AppState {
             issues: RwLock::new(vec![]),
             sprint_name: RwLock::new(None),
             issues_fetched_at: RwLock::new(None),
+            issues_all: RwLock::new(vec![]),
+            issues_all_fetched_at: RwLock::new(None),
             sprint_field_id: RwLock::new(None),
             account_id: RwLock::new(None),
             today_secs: RwLock::new(None),

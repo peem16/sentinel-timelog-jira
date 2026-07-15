@@ -68,16 +68,24 @@ impl GitHubClient {
 
         // stage 1 — candidate PRs. Search's date qualifier filters on the PR's
         // `updated` field (not the review time), so this only narrows the set;
-        // stage 2 verifies the review/comment actually happened today.
+        // stage 2 verifies the review/comment actually happened today. The two
+        // searches are independent, so run them concurrently.
+        let search_url = format!("{API}/search/issues");
+        let query = |qual: String| {
+            vec![
+                ("q", format!("is:pr org:{org} {qual} updated:>={today}")),
+                ("per_page", "50".to_string()),
+            ]
+        };
+        let q_rev = query(format!("reviewed-by:{login}"));
+        let q_com = query(format!("commenter:{login}"));
+        let (rev, com) = tokio::join!(
+            self.get(&search_url, &q_rev),
+            self.get(&search_url, &q_com),
+        );
+
         let mut candidates: HashMap<String, Value> = HashMap::new();
-        for qual in [format!("reviewed-by:{login}"), format!("commenter:{login}")] {
-            let q = format!("is:pr org:{org} {qual} updated:>={today}");
-            let res = self
-                .get(
-                    &format!("{API}/search/issues"),
-                    &[("q", q), ("per_page", "50".into())],
-                )
-                .await?;
+        for res in [rev?, com?] {
             for item in res["items"].as_array().unwrap_or(&vec![]) {
                 if let Some(url) = item["html_url"].as_str() {
                     candidates.entry(url.to_string()).or_insert_with(|| item.clone());
@@ -85,28 +93,28 @@ impl GitHubClient {
             }
         }
 
-        let mut out: Vec<ReviewedPR> = vec![];
-        for item in candidates.values() {
+        // stage 2 — verify each candidate concurrently. Every PR needs two GET
+        // calls (reviews + comments); doing all PRs in parallel turns what was
+        // 2×N serial roundtrips into a single concurrent wave.
+        let today = today.as_str(); // Copy, so each async block can capture it
+        let verified = futures::future::join_all(candidates.values().map(|item| async move {
             let html_url = item["html_url"].as_str().unwrap_or_default().to_string();
             let number = item["number"].as_u64().unwrap_or(0);
             let title = item["title"].as_str().unwrap_or_default().to_string();
             let author = item["user"]["login"].as_str().unwrap_or_default().to_string();
-            let Some((owner, repo)) = parse_owner_repo(item["repository_url"].as_str().unwrap_or_default())
-            else {
-                continue;
-            };
+            let (owner, repo) =
+                parse_owner_repo(item["repository_url"].as_str().unwrap_or_default())?;
 
-            // stage 2 — verify a review/comment by us landed today, capturing
-            // its time. Ok(None) = verified nothing today (skip); Err = the
-            // verification calls failed, so keep the candidate with unknown time.
+            // Ok(None) = verified nothing today (skip); Err = the verification
+            // calls failed, so keep the candidate with unknown time.
             let reviewed_at = match self.last_action_today(&owner, &repo, number, login, &today).await
             {
                 Ok(Some(dt)) => Some(dt),
-                Ok(None) => continue,
+                Ok(None) => return None,
                 Err(_) => None,
             };
 
-            out.push(ReviewedPR {
+            Some(ReviewedPR {
                 repo: format!("{owner}/{repo}"),
                 number,
                 title,
@@ -115,8 +123,11 @@ impl GitHubClient {
                 reviewed_at: reviewed_at.map(|dt| dt.to_rfc3339()),
                 issue_key: None,
                 issue_summary: None,
-            });
-        }
+            })
+        }))
+        .await;
+
+        let mut out: Vec<ReviewedPR> = verified.into_iter().flatten().collect();
         // most recent review first; unknown-time entries sink to the bottom
         out.sort_by(|a, b| b.reviewed_at.cmp(&a.reviewed_at));
         Ok(out)
@@ -143,20 +154,6 @@ impl GitHubClient {
             }
         };
 
-        let reviews = self
-            .get(
-                &format!("{API}/repos/{owner}/{repo}/pulls/{number}/reviews"),
-                &[("per_page", "100".into())],
-            )
-            .await?;
-        if let Some(arr) = reviews.as_array() {
-            for r in arr {
-                if r["user"]["login"].as_str() == Some(login) {
-                    consider(r["submitted_at"].as_str().unwrap_or_default());
-                }
-            }
-        }
-
         // `since` = local midnight — keeps today's comments in the first page
         // even on PRs with a long comment history
         let mut comments_q = vec![("per_page", "100".to_string())];
@@ -167,12 +164,23 @@ impl GitHubClient {
         {
             comments_q.push(("since", midnight.with_timezone(&Utc).to_rfc3339()));
         }
-        let comments = self
-            .get(
-                &format!("{API}/repos/{owner}/{repo}/issues/{number}/comments"),
-                &comments_q,
-            )
-            .await?;
+        // reviews and comments are independent endpoints — fetch both at once
+        let reviews_url = format!("{API}/repos/{owner}/{repo}/pulls/{number}/reviews");
+        let comments_url = format!("{API}/repos/{owner}/{repo}/issues/{number}/comments");
+        let reviews_q = [("per_page", "100".to_string())];
+        let (reviews, comments) = tokio::join!(
+            self.get(&reviews_url, &reviews_q),
+            self.get(&comments_url, &comments_q),
+        );
+        let (reviews, comments) = (reviews?, comments?);
+
+        if let Some(arr) = reviews.as_array() {
+            for r in arr {
+                if r["user"]["login"].as_str() == Some(login) {
+                    consider(r["submitted_at"].as_str().unwrap_or_default());
+                }
+            }
+        }
         if let Some(arr) = comments.as_array() {
             for c in arr {
                 if c["user"]["login"].as_str() == Some(login) {

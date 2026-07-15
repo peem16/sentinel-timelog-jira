@@ -227,6 +227,21 @@
         </details>
 
         <details>
+          <summary>AI ช่วยเขียน Task/Bug</summary>
+          <div class="field"><span class="hint">
+            เปิด/ปิดด้วยปุ่ม ✨ ในหน้าสร้าง Task — คำสั่งด้านล่างรับ prompt ทาง stdin แล้วพิมพ์คำตอบออก stdout
+            (default ใช้ Claude Code ที่ login ไว้ในเครื่อง เปลี่ยนเป็น CLI อื่นได้ ถ้าหาไม่เจอให้ใส่ path เต็ม)
+            โครงรายละเอียด/รูปแบบ issue ให้ skill ด้านล่างเป็นคนตัดสินใจ (ติดตั้ง skill ไว้ในเครื่องแล้ว)
+            — default เปิด <code>--allowedTools "Read Grep Glob Bash(git:*)"</code> ให้ skill อ่านโค้ดจริง + ดึง git permalink (SHA) มาเติม Reference ได้ครบ (จำกัดเฉพาะ read/git ช้าลงหน่อยแต่ละเอียดกว่า)
+          </span></div>
+          <label class="field"><span>คำสั่ง AI CLI</span><input id="s-ai-command" placeholder='claude -p --strict-mcp-config --allowedTools "Read Grep Glob Bash(git:*)" --output-format json' /></label>
+          <label class="field"><span>Skill ที่บังคับใช้</span><input id="s-ai-skill" placeholder="mdt-task-writer" /></label>
+          <div class="field"><span class="hint">
+            ทุกครั้งที่กด ✨ จะขึ้นต้น prompt ด้วย <code>/&lt;skill&gt;</code> เพื่อบังคับให้ Claude Code โหลด skill นี้แน่นอน (เว้นว่าง = ไม่ใช้ skill)
+          </span></div>
+        </details>
+
+        <details>
           <summary>ทั่วไป</summary>
           <label class="field check-field">
             <input type="checkbox" id="s-autostart" />
@@ -259,13 +274,21 @@
         <div class="field">
           <div class="field-head">
             <span>รายละเอียด (ไม่บังคับ)</span>
-            <button id="btn-mic" class="icon-btn mic-btn" type="button" title="สั่งพิมพ์ด้วยเสียง (ภาษาไทย) — คลิก หรือกด Alt ค้าง">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"></rect><path d="M5 10a7 7 0 0 0 14 0"></path><line x1="12" y1="17" x2="12" y2="21"></line></svg>
-            </button>
+            <div class="field-head-btns">
+              <button id="btn-ai" class="icon-btn ai-btn" type="button" title="AI ช่วยเรียบเรียง: ปิด — คลิกเพื่อเปิด">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="M19 14.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z"></path></svg>
+              </button>
+              <button id="btn-mic" class="icon-btn mic-btn" type="button" title="สั่งพิมพ์ด้วยเสียง (ภาษาไทย) — คลิก หรือกด Alt ค้าง">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"></rect><path d="M5 10a7 7 0 0 0 14 0"></path><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+              </button>
+            </div>
           </div>
           <textarea id="create-desc" rows="4" placeholder="รายละเอียดเพิ่มเติม"></textarea>
         </div>
-        <button id="btn-create-submit" class="btn primary">บันทึกลง Jira</button>
+        <div class="btn-row">
+          <button id="btn-ai-generate" class="btn ghost" type="button" hidden>✨ ให้ AI เรียบเรียง</button>
+          <button id="btn-create-submit" class="btn primary">บันทึกลง Jira</button>
+        </div>
         <div id="create-msg" class="msg"></div>
       </div>
     </div>

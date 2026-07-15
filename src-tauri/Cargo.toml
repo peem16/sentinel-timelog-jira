@@ -23,7 +23,8 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
-tokio = { version = "1", features = ["time", "sync", "macros"] }
+tokio = { version = "1", features = ["time", "sync", "macros", "process", "io-util"] }
+futures = { version = "0.3", default-features = false }
 regex = "1"
 sha2 = "0.10"
 base64 = "0.22"
@@ -35,3 +36,13 @@ urlencoding = "2"
 lto = true
 codegen-units = 1
 strip = true
+
+# Keep the debug `target/` from ballooning (it was ~17GB from full debuginfo on
+# the whole Tauri/windows dep tree). We only ever step through our own code:
+[profile.dev]
+# file:line in backtraces/panics, but no heavy type debuginfo → far smaller PDBs
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+# dependencies carry no debuginfo at all (the windows/tauri crates were the bulk)
+debug = false
